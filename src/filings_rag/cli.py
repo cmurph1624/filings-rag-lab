@@ -33,8 +33,7 @@ def db_migrate() -> None:
 @bench_app.command("pull")
 def bench_pull() -> None:
     """Download the pinned FinanceBench open subset and load it into Postgres."""
-    src = DATA / "financebench"
-    financebench.download(src)
+    src = financebench.download(DATA / "financebench")
     with psycopg.connect(get_settings().database_url) as conn:
         docs, questions = financebench.load(conn, src)
     typer.echo(f"loaded {questions} questions over {docs} documents")

@@ -56,7 +56,13 @@ class EdgarClient:
             return path.read_bytes()
         for attempt in range(self._retries + 1):
             self._throttle()
-            resp = self._http.get(url)
+            try:
+                resp = self._http.get(url)
+            except httpx.TransportError:
+                if attempt == self._retries:
+                    raise
+                self._sleep(2.0**attempt)
+                continue
             if resp.status_code in RETRY_STATUS and attempt < self._retries:
                 self._sleep(2.0**attempt)
                 continue
@@ -64,7 +70,9 @@ class EdgarClient:
             break
         if cache:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(resp.content)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_bytes(resp.content)
+            tmp.replace(path)  # atomic: a killed run never leaves a truncated cache entry
         return resp.content
 
     def get_json(self, url: str, *, cache: bool = True) -> Any:

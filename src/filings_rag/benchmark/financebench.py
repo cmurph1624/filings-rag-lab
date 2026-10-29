@@ -16,8 +16,13 @@ DOCS_FILE = "financebench_document_information.jsonl"
 PDF_URL = BASE + "/pdfs/{doc_name}.pdf"
 
 
-def download(dest: Path) -> None:
-    """Fetch the two JSONL files into `dest` (skips files already present)."""
+def download(root: Path) -> Path:
+    """Fetch the two JSONL files into `root/<COMMIT>/` and return that directory.
+
+    Keyed by commit so bumping the pin always fetches fresh files. Writes are atomic,
+    so an interrupted download never leaves a truncated file that later runs would skip.
+    """
+    dest = root / COMMIT
     dest.mkdir(parents=True, exist_ok=True)
     for name in (QUESTIONS_FILE, DOCS_FILE):
         path = dest / name
@@ -25,7 +30,10 @@ def download(dest: Path) -> None:
             continue
         resp = httpx.get(f"{BASE}/data/{name}", follow_redirects=True, timeout=60)
         resp.raise_for_status()
-        path.write_bytes(resp.content)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(resp.content)
+        tmp.replace(path)
+    return dest
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

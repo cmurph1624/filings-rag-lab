@@ -75,3 +75,29 @@ def test_submissions_merges_paged_history(tmp_path: Path) -> None:
     )
     rows = client.submissions(7)
     assert [(r["accessionNumber"], r["form"]) for r in rows] == [("a2", "10-K"), ("a1", "10-Q")]
+
+
+def test_retries_transport_errors(tmp_path: Path) -> None:
+    calls = [0]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls[0] += 1
+        if calls[0] == 1:
+            raise httpx.ReadTimeout("slow", request=req)
+        return httpx.Response(200, content=b"ok")
+
+    client = EdgarClient(UA, tmp_path, transport=httpx.MockTransport(handler), sleep=lambda s: None)
+    assert client.get_bytes("https://www.sec.gov/x", cache=False) == b"ok"
+    assert calls[0] == 2
+
+
+def test_transport_error_raises_after_last_retry(tmp_path: Path) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=req)
+
+    client = EdgarClient(
+        UA, tmp_path, transport=httpx.MockTransport(handler), retries=2, sleep=lambda s: None
+    )
+    with pytest.raises(httpx.ConnectError):
+        client.get_bytes("https://www.sec.gov/x", cache=False)
+    assert not list(tmp_path.rglob("*"))  # nothing cached
