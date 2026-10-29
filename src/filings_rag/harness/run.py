@@ -19,6 +19,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from filings_rag.backends.base import ModelBackend, Result
+from filings_rag.backends.governor import UsagePaused
 from filings_rag.harness.config import RunConfig
 from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
@@ -89,6 +90,7 @@ class RunStats:
     embed_cost: float = 0.0
     reported_cost: float = 0.0  # sum of what the backend reported, for cross-checking
     stopped_early: bool = False
+    paused: str | None = None  # the usage governor's reason, when it stopped the run
     finished: bool = False
 
 
@@ -237,6 +239,11 @@ def execute(
         error: str | None = None
         try:
             result = fut.result()
+        except UsagePaused as e:
+            # Not recorded: the model wasn't called. The query embedding is paid again, and
+            # recorded, when the question is answered on resume.
+            stats.paused = str(e)
+            return
         except Exception as e:  # one bad answer shouldn't stop the run; it's retried on resume
             error = f"{type(e).__name__}: {e}"
         record(job, job.question_id, result, error)  # exactly once, whatever happens after
@@ -244,6 +251,8 @@ def execute(
     in_flight: dict[Future[Result], _Job] = {}
     with ThreadPoolExecutor(concurrency) as pool:
         for qid, question in todo:
+            if stats.paused:
+                break
             if streak >= max_failures:
                 stats.stopped_early = True
                 log(f"stopping: {streak} failures in a row (resume with --resume {run_id})")
@@ -275,6 +284,12 @@ def execute(
             for f in done:
                 settle(f, in_flight.pop(f))
 
+    if stats.paused:
+        stats.stopped_early = True
+        log(
+            f"paused by the usage governor: {stats.paused}. Resume with --resume {run_id}"
+            " once usage drops (or after `usage override 2h`)"
+        )
     stats.finished = _mark_finished(conn, run_id, cfg.questions)
     return stats
 

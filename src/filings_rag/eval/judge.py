@@ -15,6 +15,7 @@ from typing import Any
 import psycopg
 
 from filings_rag.backends.base import ModelBackend, Result
+from filings_rag.backends.governor import UsagePaused
 from filings_rag.harness.prompts import JudgePrompt
 from filings_rag.pricing import Usage, model_cost
 
@@ -48,6 +49,7 @@ class JudgeStats:
     skipped: int = 0  # already judged by this judge
     usage: Usage = Usage()
     cost: float = 0.0
+    paused: str | None = None  # the usage governor's reason, when it stopped judging
 
 
 _RECORD = """
@@ -145,6 +147,9 @@ def judge_run(
         error: str | None = None
         try:
             result = fut.result()
+        except UsagePaused as e:  # nothing spent; re-running `frl judge` picks it up
+            stats.paused = str(e)
+            return
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
         record(qid, result, error)
@@ -154,6 +159,8 @@ def judge_run(
         for qid, question, gold, justification, answer, done in rows:
             if done:
                 continue
+            if stats.paused:
+                break
             text = prompt.render(question, gold, justification, answer)
             in_flight[pool.submit(backend.generate, prompt.system, text)] = qid
             while len(in_flight) >= max(1, concurrency):
@@ -164,4 +171,9 @@ def judge_run(
             finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
             for f in finished:
                 settle(f, in_flight.pop(f))
+    if stats.paused:
+        log(
+            f"paused by the usage governor: {stats.paused}. Re-run `frl judge {run_id}`"
+            " once usage drops (or after `usage override 2h`)"
+        )
     return stats
