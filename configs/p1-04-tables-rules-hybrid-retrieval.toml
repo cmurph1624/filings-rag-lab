@@ -1,0 +1,12 @@
+# Retrieval-only: table-preserving@1, rules scope, hybrid (vector + BM25, RRF); PR 4 re-test.
+name = "p1-04-tables-rules-hybrid-retrieval"
+pipeline = "table-preserving@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "hybrid"
+k = 10
+
+[retriever.scope]
+mode = "rules"
