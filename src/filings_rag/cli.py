@@ -1,3 +1,4 @@
+import csv
 from collections import Counter
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import typer
 from filings_rag import db
 from filings_rag.benchmark import financebench
 from filings_rag.config import get_settings
-from filings_rag.edgar import resolve
+from filings_rag.edgar import fetch, resolve
 from filings_rag.edgar.client import EdgarClient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +59,33 @@ def corpus_audit() -> None:
     for r in rows:
         if r.status != "resolved":
             typer.echo(f"  {r.status:10} {r.doc_name}  {r.note}")
+
+
+@corpus_app.command("fetch")
+def corpus_fetch(
+    only: str = typer.Option("", help="Fetch just this doc_name"),
+) -> None:
+    """Download every resolved manifest filing, extract text, and upsert `documents`."""
+    settings = get_settings()
+    client = EdgarClient(settings.sec_user_agent, DATA / "edgar" / "cache")
+    with (CORPUS / "companies.csv").open() as fh:
+        tickers = {r["company"]: r["ticker"] for r in csv.DictReader(fh)}
+    rows = [
+        r for r in fetch.read_manifest(CORPUS / "manifest.csv") if not only or r.doc_name == only
+    ]
+    failed = 0
+    with psycopg.connect(settings.database_url) as conn:
+        for r in rows:
+            try:
+                n = fetch.fetch_document(conn, client, r, tickers.get(r.company), DATA)
+                typer.echo(f"  ok   {r.doc_name:40} {n:>9,} chars")
+            except Exception as e:  # report and keep going; one bad filing shouldn't stop the batch
+                conn.rollback()
+                failed += 1
+                typer.echo(f"  FAIL {r.doc_name:40} {e}", err=True)
+    typer.echo(f"fetched {len(rows) - failed}/{len(rows)}")
+    if failed:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
