@@ -10,6 +10,11 @@ from filings_rag.benchmark import financebench
 from filings_rag.config import get_settings
 from filings_rag.edgar import fetch, resolve
 from filings_rag.edgar.client import EdgarClient
+from filings_rag.embed.voyage import VoyageEmbedder
+from filings_rag.eval import labels
+from filings_rag.ingest import build
+from filings_rag.ingest.registry import get_pipeline
+from filings_rag.pricing import embedding_cost
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -22,6 +27,8 @@ bench_app = typer.Typer(no_args_is_help=True, help="Benchmark data")
 app.add_typer(bench_app, name="bench")
 corpus_app = typer.Typer(no_args_is_help=True, help="Filing corpus")
 app.add_typer(corpus_app, name="corpus")
+ingest_app = typer.Typer(no_args_is_help=True, help="Ingest pipelines")
+app.add_typer(ingest_app, name="ingest")
 
 
 @db_app.command("migrate")
@@ -86,6 +93,40 @@ def corpus_fetch(
     typer.echo(f"fetched {len(rows) - failed}/{len(rows)}")
     if failed:
         raise typer.Exit(1)
+
+
+@ingest_app.command("build")
+def ingest_build(
+    pipeline: str = typer.Argument(..., help="name@version, e.g. naive-fixed@1"),
+    only: str = typer.Option("", help="Build just this doc_name"),
+) -> None:
+    """Chunk, embed and index every document for one pipeline version (resumable)."""
+    settings = get_settings()
+    p = get_pipeline(pipeline)
+    embedder = VoyageEmbedder(settings.voyage_api_key)
+    with psycopg.connect(settings.database_url) as conn:
+        stats = build.build(conn, p, embedder, docs=[only] if only else None, log=typer.echo)
+    cost = embedding_cost(embedder.name, stats.embed_tokens)
+    typer.echo(
+        f"{pipeline}: {stats.documents} documents ({stats.empty} empty), {stats.chunks:,} chunks, "
+        f"{stats.embed_tokens:,} embedding tokens (${cost:.2f} at list)"
+    )
+
+
+@ingest_app.command("label")
+def ingest_label(pipeline: str = typer.Argument(..., help="name@version")) -> None:
+    """Map FinanceBench evidence passages to this pipeline's chunks."""
+    p = get_pipeline(pipeline)
+    with psycopg.connect(get_settings().database_url) as conn:
+        r = labels.label(conn, p)
+    typer.echo(
+        f"{pipeline}: {r.labelled}/{r.items} evidence passages labelled "
+        f"({r.labels} chunk labels); page agreement {r.page_agree}/{r.page_checked}"
+    )
+    for m in r.missing:
+        typer.echo(f"  unlabelled {m}")
+    for b in r.broad:
+        typer.echo(f"  too generic (short passage, many chunks) {b}")
 
 
 if __name__ == "__main__":
