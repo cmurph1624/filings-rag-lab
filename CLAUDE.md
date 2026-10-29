@@ -21,6 +21,8 @@ Read it before changing architecture. Retrieval is the focus; the harness makes 
 - EDGAR: send `SEC_USER_AGENT` on every request and stay under 10 req/s.
 - Results are FinanceBench **open subset (150 questions)**. Never imply full-set numbers.
 - The public deployment uses the Anthropic API only; `claude-cli` is for local benchmark runs.
+- `claude-cli` calls go through the usage governor (`backends/governor.py`): one at a time, 10–40 s
+  apart depending on subscription usage, and a clean stop (exit 3, resumable) at 75%.
 
 ## Workflow
 - Branch + PR per change; the automated reviewer watches this repo (run the pr-review-loop skill).

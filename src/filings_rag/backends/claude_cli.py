@@ -8,6 +8,9 @@ Auth: the child process gets no ANTHROPIC_* variables. If ANTHROPIC_API_KEY (or 
 base URL) is set, Claude Code uses it ahead of the subscription login and "subscription" runs
 bill the API. CLAUDE_* session variables are dropped too (CLAUDE_EFFORT overrides --effort),
 except the two that locate the subscription login itself.
+
+With a Governor (the factory always passes one), calls go one at a time, paced by subscription
+usage, and stop with UsagePaused at 75% (see governor.py).
 """
 
 import json
@@ -16,9 +19,11 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from typing import Any
 
 from filings_rag.backends.base import BackendError, Result
+from filings_rag.backends.governor import Governor
 from filings_rag.pricing import Usage
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -41,12 +46,14 @@ class ClaudeCliBackend:
         timeout_s: float = 600,
         executable: str = "claude",
         runner: Runner = subprocess.run,
+        governor: Governor | None = None,
     ) -> None:
         self.model = model
         self.effort = effort
         self.timeout_s = timeout_s
         self.executable = executable
         self._run = runner
+        self.governor = governor
 
     def argv(self, system: str) -> list[str]:
         args = [
@@ -65,6 +72,13 @@ class ClaudeCliBackend:
         return args
 
     def generate(self, system: str, prompt: str) -> Result:
+        with self.governor.call() if self.governor else nullcontext():
+            result = self._generate(system, prompt)
+        if self.governor:
+            self.governor.record(result)
+        return result
+
+    def _generate(self, system: str, prompt: str) -> Result:
         start = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="frl-cli-") as cwd:
             try:

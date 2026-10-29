@@ -3,6 +3,7 @@ from typing import Any
 from filings_rag.backends.anthropic_api import AnthropicApiBackend
 from filings_rag.backends.base import ModelBackend
 from filings_rag.backends.claude_cli import ClaudeCliBackend
+from filings_rag.backends.governor import default_governor
 
 
 def make_backend(spec: dict[str, Any]) -> ModelBackend:
@@ -10,7 +11,7 @@ def make_backend(spec: dict[str, Any]) -> ModelBackend:
     kind = spec["backend"]
     opts = {k: v for k, v in spec.items() if k not in ("backend", "model")}
     if kind == "claude-cli":
-        return ClaudeCliBackend(spec["model"], **opts)
+        return ClaudeCliBackend(spec["model"], governor=default_governor(), **opts)
     if kind == "anthropic-api":
         return AnthropicApiBackend(spec["model"], **opts)
     raise ValueError(f"unknown backend {kind!r}")

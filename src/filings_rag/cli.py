@@ -178,6 +178,8 @@ def run_cmd(
         f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f});"
         f" backend reported ${s.reported_cost:.4f}"
     )
+    if s.paused:  # a clean stop, not a failure: exit 3 like `usage gate`
+        raise typer.Exit(3)
     if s.failed or s.stopped_early:
         raise typer.Exit(1)
 
@@ -212,6 +214,8 @@ def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
         f"run {run_id}: {s.judged} judged, {s.failed} failed, {s.skipped} already judged;"
         f" judge cost ${s.cost:.4f} (API-equivalent)"
     )
+    if s.paused:
+        raise typer.Exit(3)
     if s.failed:
         raise typer.Exit(1)
 

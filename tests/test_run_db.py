@@ -7,6 +7,7 @@ from psycopg.types.json import Jsonb
 
 from filings_rag import db
 from filings_rag.backends.base import BackendError, Result
+from filings_rag.backends.governor import UsagePaused
 from filings_rag.embed.base import Embeddings, InputType
 from filings_rag.extract.html import EXTRACTOR
 from filings_rag.harness.config import from_dict
@@ -180,6 +181,54 @@ def test_run_stops_after_consecutive_failures(conn: psycopg.Connection) -> None:
     b = FakeBackend(fail=set(QIDS))
     _, s = run(conn, b, concurrency=1, max_consecutive_failures=2)
     assert s.stopped_early and s.failed == 2 and len(b.prompts) == 2
+
+
+class PausingBackend(FakeBackend):
+    """Answers `allow` questions, then the usage governor says stop."""
+
+    def __init__(self, allow: int) -> None:
+        super().__init__()
+        self.allow = allow
+
+    def generate(self, system: str, prompt: str) -> Result:
+        with self.lock:
+            if len(self.prompts) >= self.allow:
+                raise UsagePaused("weekly limit at 80%")
+        return super().generate(system, prompt)
+
+
+def test_a_usage_pause_stops_cleanly_and_resumes(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    rid, s = run(conn, PausingBackend(allow=2), concurrency=1)
+    assert (s.answered, s.failed, s.paused, s.stopped_early) == (2, 0, "weekly limit at 80%", True)
+    rows = conn.execute("SELECT count(*) FROM run_questions WHERE run_id = %s", (rid,)).fetchone()
+    assert rows == (2,)  # the paused question left no row (and no failure)
+    b = FakeBackend()
+    _, rest = run(conn, b, run_id=rid)
+    assert (rest.answered, rest.skipped, rest.finished, rest.paused) == (2, 2, True, None)
+
+
+def test_a_usage_pause_stops_judging(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.eval.judge import judge_run
+    from filings_rag.harness.prompts import get_judge_prompt
+
+    c = cfg()
+    rid, _ = run(conn, FakeBackend())
+
+    class PausingJudge(FakeJudge):
+        def generate(self, system: str, prompt: str) -> Result:
+            if self.calls >= 1:
+                raise UsagePaused("5-hour limit at 76%")
+            return super().generate(system, prompt)
+
+    j = PausingJudge({})
+    s = judge_run(
+        conn, rid, c.judge_key, j, get_judge_prompt("judge@1"), concurrency=1, log=lambda s: None
+    )
+    assert (s.judged, s.failed, s.paused) == (1, 0, "5-hour limit at 76%")
+    s2 = judge_run(
+        conn, rid, c.judge_key, FakeJudge({}), get_judge_prompt("judge@1"), log=lambda s: None
+    )
+    assert (s2.judged, s2.skipped, s2.paused) == (3, 1, None)
 
 
 def test_resume_refuses_a_different_config(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
