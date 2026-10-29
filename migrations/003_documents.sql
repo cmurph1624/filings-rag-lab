@@ -1,8 +1,9 @@
--- One row per fetched filing. Raw files stay on disk under data/raw/; extracted text lives here.
+-- One row per (filing, extractor version): a new extractor gets new rows, never overwrites.
+-- Raw files stay on disk under data/raw/; extracted text lives here.
 CREATE TABLE documents (
     id            serial PRIMARY KEY,
-    accession     text NOT NULL UNIQUE,
-    doc_name      text UNIQUE REFERENCES benchmark_docs (doc_name),  -- null for non-benchmark filings
+    accession     text NOT NULL,
+    doc_name      text REFERENCES benchmark_docs (doc_name),  -- null for non-benchmark filings
     cik           int  NOT NULL,
     ticker        text,
     company       text NOT NULL,
@@ -17,6 +18,8 @@ CREATE TABLE documents (
     page_offsets  int[] NOT NULL,         -- char offset where each page starts (page 1 = offset 0)
     body          text NOT NULL,
     extractor     text NOT NULL,          -- extractor name@version that produced body
-    fetched_at    timestamptz NOT NULL DEFAULT now()
+    fetched_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (accession, extractor),
+    UNIQUE (doc_name, extractor)
 );
 CREATE INDEX documents_scope_idx ON documents (cik, form_type, fiscal_year, fiscal_period);

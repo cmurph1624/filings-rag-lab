@@ -47,3 +47,27 @@ def test_build_body_offsets() -> None:
     assert body[parts[1]["start"] : parts[1]["end"]] == "p1\np2"
     assert "[EX-99.1 b.htm]" in body
     assert [body[p:].split("\n")[0] for p in pages] == ["cover", "p1", "p2"]
+
+
+def _ff(seq: str, type_: str, name: str) -> FilingFile:
+    return FilingFile(seq, type_, name, "u")
+
+
+def test_periodic_filings_keep_ex13_but_not_ex99() -> None:
+    files = [
+        _ff("1", "10-K", "k.htm"),
+        _ff("2", "EX-99.1", "sub-financials.htm"),
+        _ff("3", "EX-13.1", "annual-report.htm"),
+        _ff("4", "EX-31.1", "cert.htm"),
+    ]
+    assert [f.filename for f in select_files(files, "k.htm")] == ["k.htm", "annual-report.htm"]
+
+
+def test_non_html_exhibits_are_skipped() -> None:
+    files = [
+        _ff("1", "8-K", "e.htm"),
+        _ff("2", "EX-99.1", "release.txt"),
+        _ff("3", "EX-99.2", "deck.pdf"),
+        _ff("4", "EX-99.3", "release.HTML"),
+    ]
+    assert [f.filename for f in select_files(files, "e.htm")] == ["e.htm", "release.HTML"]

@@ -1,4 +1,4 @@
-"""Download a filing's primary document (plus EX-99 exhibits for 8-Ks) and extract its text."""
+"""Download a filing's primary document plus its content exhibits, and extract the text."""
 
 import csv
 from dataclasses import dataclass
@@ -49,16 +49,22 @@ def filing_files(index_html: bytes) -> list[FilingFile]:
 
 
 def select_files(files: list[FilingFile], primary: str) -> list[FilingFile]:
-    """The primary document first, then EX-13 / EX-99 exhibits, in filing order.
+    """The primary document first, then its content exhibits (HTML only), in filing order.
 
-    EX-99.x carries 8-K press releases; EX-13 is the annual report some filers (CVS through
-    2018) use for their financial statements instead of the 10-K body.
+    8-K: EX-99.x (press releases, where the earnings text lives). All forms: EX-13, the annual
+    report some filers (CVS through 2018) use for their financial statements. Other 10-K/10-Q
+    exhibits (subsidiary financials, certifications) are left out; FinanceBench never uses them.
     """
     main = [f for f in files if f.filename == primary]
     if not main:
         raise ValueError(f"primary document {primary} not in filing index")
+    wanted = ("EX-99", "EX-13") if main[0].type.upper() == "8-K" else ("EX-13",)
     exhibits = [
-        f for f in files if f.type.upper().startswith(("EX-99", "EX-13")) and f.filename != primary
+        f
+        for f in files
+        if f.type.upper().startswith(wanted)
+        and f.filename != primary
+        and f.filename.lower().endswith((".htm", ".html"))
     ]
     return main + exhibits
 
@@ -91,6 +97,31 @@ def build_body(
     return body, meta, pages
 
 
+_UPSERT = """
+INSERT INTO documents
+    (accession, doc_name, cik, ticker, company, form_type, fiscal_year, fiscal_period,
+     period_end, filing_date, source, raw_dir, parts, page_offsets, body, extractor)
+VALUES (%(accession)s, %(doc_name)s, %(cik)s, %(ticker)s, %(company)s, %(form_type)s,
+        %(fiscal_year)s, %(fiscal_period)s, %(period_end)s, %(filing_date)s, 'edgar',
+        %(raw_dir)s, %(parts)s, %(page_offsets)s, %(body)s, %(extractor)s)
+ON CONFLICT (accession, extractor) DO UPDATE SET
+    doc_name = EXCLUDED.doc_name, ticker = EXCLUDED.ticker, company = EXCLUDED.company,
+    form_type = EXCLUDED.form_type, fiscal_year = EXCLUDED.fiscal_year,
+    fiscal_period = EXCLUDED.fiscal_period, period_end = EXCLUDED.period_end,
+    filing_date = EXCLUDED.filing_date, raw_dir = EXCLUDED.raw_dir, parts = EXCLUDED.parts,
+    page_offsets = EXCLUDED.page_offsets, body = EXCLUDED.body, fetched_at = now()
+RETURNING id
+"""
+
+
+def upsert_document(conn: psycopg.Connection[Any], values: dict[str, Any]) -> int:
+    """One row per (accession, extractor): re-running a version refreshes it, a new version
+    gets its own row, so offsets stored against an older body stay valid."""
+    row = conn.execute(_UPSERT, values).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def fetch_document(
     conn: psycopg.Connection[Any],
     client: EdgarClient,
@@ -117,35 +148,25 @@ def fetch_document(
         labels = periodic_filings(client.companyfacts(row.cik)).get(acc)
         if labels:
             _, fy, fp = labels
-    conn.execute(
-        """INSERT INTO documents
-           (accession, doc_name, cik, ticker, company, form_type, fiscal_year, fiscal_period,
-            period_end, filing_date, source, raw_dir, parts, page_offsets, body, extractor)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'edgar', %s, %s, %s, %s, %s)
-           ON CONFLICT (accession) DO UPDATE SET doc_name = EXCLUDED.doc_name,
-             ticker = EXCLUDED.ticker, company = EXCLUDED.company,
-             form_type = EXCLUDED.form_type, fiscal_year = EXCLUDED.fiscal_year,
-             fiscal_period = EXCLUDED.fiscal_period, period_end = EXCLUDED.period_end,
-             filing_date = EXCLUDED.filing_date, raw_dir = EXCLUDED.raw_dir,
-             parts = EXCLUDED.parts, page_offsets = EXCLUDED.page_offsets,
-             body = EXCLUDED.body, extractor = EXCLUDED.extractor, fetched_at = now()""",
-        (
-            acc,
-            row.doc_name,
-            row.cik,
-            ticker,
-            row.company,
-            form,
-            fy,
-            fp,
-            row.report_date or None,
-            row.filing_date,
-            str(raw_dir),
-            Jsonb(meta),
-            pages,
-            body,
-            EXTRACTOR,
-        ),
+    upsert_document(
+        conn,
+        {
+            "accession": acc,
+            "doc_name": row.doc_name,
+            "cik": row.cik,
+            "ticker": ticker,
+            "company": row.company,
+            "form_type": form,
+            "fiscal_year": fy,
+            "fiscal_period": fp,
+            "period_end": row.report_date or None,
+            "filing_date": row.filing_date,
+            "raw_dir": str(raw_dir),
+            "parts": Jsonb(meta),
+            "page_offsets": pages,
+            "body": body,
+            "extractor": EXTRACTOR,
+        },
     )
     conn.commit()
     return len(body)
