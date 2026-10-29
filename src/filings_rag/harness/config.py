@@ -9,8 +9,9 @@ from typing import Any
 
 from filings_rag.retrieve.factory import resolve_spec
 
-REQUIRED = {"name", "pipeline", "retriever", "generation", "judge"}
-OPTIONAL = {"questions", "execution"}
+REQUIRED = {"name", "pipeline", "retriever"}
+# No [generation] means a retrieval-only run: retrieval is scored, no model is called.
+OPTIONAL = {"questions", "execution", "generation", "judge"}
 NOT_HASHED = {"name", "execution"}  # labels and how-to-run settings don't change results
 EXECUTION_DEFAULTS: dict[str, int] = {"concurrency": 2, "max_consecutive_failures": 5}
 
@@ -20,8 +21,8 @@ class RunConfig:
     name: str
     pipeline: str  # name@version
     retriever: dict[str, Any]
-    generation: dict[str, Any]  # {backend, model, prompt, effort?}
-    judge: dict[str, Any]  # {backend, model, prompt, effort?}; pinned per run
+    generation: dict[str, Any] | None  # {backend, model, prompt, effort?}; None: retrieval only
+    judge: dict[str, Any] | None  # {backend, model, prompt, effort?}; pinned per run
     questions: str
     execution: dict[str, int]
     raw: dict[str, Any] = field(repr=False)
@@ -35,17 +36,23 @@ class RunConfig:
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
     @property
-    def backend_spec(self) -> dict[str, Any]:
+    def backend_spec(self) -> dict[str, Any] | None:
+        if self.generation is None:
+            return None
         return {k: v for k, v in self.generation.items() if k != "prompt"}
 
     @property
-    def judge_spec(self) -> dict[str, Any]:
+    def judge_spec(self) -> dict[str, Any] | None:
+        if self.judge is None:
+            return None
         return {k: v for k, v in self.judge.items() if k != "prompt"}
 
     @property
-    def judge_key(self) -> str:
+    def judge_key(self) -> str | None:
         """Identifies the judge's verdicts: backend, model, effort if set, and prompt."""
         j = self.judge
+        if j is None:
+            return None
         effort = f":{j['effort']}" if j.get("effort") else ""
         return f"{j['backend']}:{j['model']}{effort}:{j['prompt']}"
 
@@ -57,12 +64,12 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
     unknown = raw.keys() - REQUIRED - OPTIONAL
     if unknown:
         raise ValueError(f"run config has unknown keys {sorted(unknown)}")
-    for key in ("backend", "model", "prompt"):
-        if key not in raw["generation"]:
-            raise ValueError(f"[generation] needs {key!r}")
-    for key in ("backend", "model", "prompt"):
-        if key not in raw["judge"]:
-            raise ValueError(f"[judge] needs {key!r}")
+    if ("judge" in raw) != ("generation" in raw):  # an unjudged run's spend could never be scored
+        raise ValueError("[generation] and [judge] go together; omit both for a retrieval-only run")
+    for table in ("generation", "judge"):
+        for key in ("backend", "model", "prompt"):
+            if table in raw and key not in raw[table]:
+                raise ValueError(f"[{table}] needs {key!r}")
     resolve_spec(raw["retriever"])  # fail on a bad [retriever] at load time, not mid-run
     execution = dict(raw.get("execution", {}))
     bad = execution.keys() - EXECUTION_DEFAULTS.keys()
@@ -72,8 +79,8 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
         name=raw["name"],
         pipeline=raw["pipeline"],
         retriever=dict(raw["retriever"]),
-        generation=dict(raw["generation"]),
-        judge=dict(raw["judge"]),
+        generation=dict(raw["generation"]) if "generation" in raw else None,
+        judge=dict(raw["judge"]) if "judge" in raw else None,
         questions=raw.get("questions", "financebench-open"),
         execution=EXECUTION_DEFAULTS | execution,
         raw=raw,

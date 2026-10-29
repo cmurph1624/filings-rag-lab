@@ -154,8 +154,9 @@ def run_cmd(
         retriever = make_retriever(
             conn, cfg.retriever, table, make_embedder(embedder_name, dims, settings)
         )
-        backend = make_backend(cfg.backend_spec)
-        prompt = get_prompt(cfg.generation["prompt"])
+        spec = cfg.backend_spec
+        backend = make_backend(spec) if spec else None  # None: retrieval-only run
+        prompt = get_prompt(cfg.generation["prompt"]) if cfg.generation else None
         if resume is not None:
             harness.check_resume(conn, resume, cfg)
             run_id = resume
@@ -167,7 +168,8 @@ def run_cmd(
         )
     u = s.usage
     typer.echo(
-        f"run {run_id}: {s.answered} answered, {s.failed} failed, {s.skipped} already done"
+        f"run {run_id}: {s.answered} {'answered' if backend else 'retrieved'}, {s.failed} failed,"
+        f" {s.skipped} already done"
         f"{' (stopped early)' if s.stopped_early else ''}{' — complete' if s.finished else ''}\n"
         f"  tokens: {u.input_tokens:,} in, {u.output_tokens:,} out, {u.cache_read_tokens:,} cache"
         f" read, {u.cache_write_tokens + u.cache_write_1h_tokens:,} cache write;"
@@ -193,6 +195,9 @@ def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
         except ValueError as e:  # e.g. runs stored before judge prompts were versioned
             typer.echo(f"run {run_id}'s stored config no longer loads ({e}); re-run it", err=True)
             raise typer.Exit(1) from e
+        if cfg.judge is None or cfg.judge_spec is None or cfg.judge_key is None:
+            typer.echo(f"run {run_id} has no [judge] (retrieval-only run)", err=True)
+            raise typer.Exit(1)
         typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
         s = judging.judge_run(
             conn,
@@ -216,11 +221,13 @@ def report_cmd(
     run_id: int = typer.Argument(..., help="Run to report on"),
     vs: Annotated[list[int] | None, typer.Option(help="Other runs alongside (repeatable)")] = None,
     out: str = typer.Option("", help="Also write the markdown to this file"),
+    retrieval_only: bool = typer.Option(False, help="Only identity, retrieval and latency"),
 ) -> None:
     """Accuracy, retrieval recall, cost and latency for one or more runs, as markdown."""
     with psycopg.connect(get_settings().database_url) as conn:
         try:
-            text = report.render([report.summarize(conn, r) for r in [run_id, *(vs or [])]])
+            summaries = [report.summarize(conn, r) for r in [run_id, *(vs or [])]]
+            text = report.render(summaries, retrieval_only=retrieval_only)
         except ValueError as e:  # unknown run, or a stored config that no longer loads
             typer.echo(f"cannot report: {e}", err=True)
             raise typer.Exit(1) from e

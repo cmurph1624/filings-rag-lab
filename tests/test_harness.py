@@ -53,7 +53,7 @@ def test_config_rejects_typos() -> None:
     with pytest.raises(ValueError, match="unknown keys"):
         from_dict({**base(), "retreiver": {}})
     with pytest.raises(ValueError, match="missing"):
-        from_dict({k: v for k, v in base().items() if k != "judge"})
+        from_dict({k: v for k, v in base().items() if k != "retriever"})
     with pytest.raises(ValueError, match="prompt"):
         from_dict({**base(), "generation": {"backend": "claude-cli", "model": "m"}})
     with pytest.raises(ValueError, match="execution"):
@@ -108,3 +108,20 @@ def test_hash_covers_retriever_defaults_not_spelling() -> None:
     assert from_dict(hnsw).hash != implicit.hash
     with pytest.raises(ValueError, match="options"):
         from_dict({**base(), "retriever": {"kind": "vector", "topk": 3}})  # caught at load
+
+
+def test_p0_config_hash_is_unchanged() -> None:
+    # Run 60 (the P0 baseline) was recorded with this hash; refactors must not move it.
+    assert load(ROOT / "configs" / "p0-naive.toml").hash == "6cc9a6708ce5ab47"
+
+
+def test_retrieval_only_config() -> None:
+    raw = {k: v for k, v in base().items() if k not in ("generation", "judge")}
+    cfg = from_dict(raw)
+    assert cfg.generation is None and cfg.judge is None
+    assert cfg.backend_spec is None and cfg.judge_key is None
+    assert cfg.hash != from_dict(base()).hash
+    with pytest.raises(ValueError, match="go together"):
+        from_dict({**raw, "judge": base()["judge"]})
+    with pytest.raises(ValueError, match="go together"):
+        from_dict({**raw, "generation": base()["generation"]})
