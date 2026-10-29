@@ -1,0 +1,9 @@
+# Retrieval-only: table-preserving@1, vector top 10 on fb-distractors@1 (compare p1-00 on naive).
+name = "p1-04-tables-retrieval"
+pipeline = "table-preserving@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10

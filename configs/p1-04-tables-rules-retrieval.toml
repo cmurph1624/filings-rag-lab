@@ -1,0 +1,12 @@
+# Retrieval-only: table-preserving@1 with the rules scope.
+name = "p1-04-tables-rules-retrieval"
+pipeline = "table-preserving@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+
+[retriever.scope]
+mode = "rules"
