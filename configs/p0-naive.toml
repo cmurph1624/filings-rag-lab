@@ -16,6 +16,7 @@ prompt = "answer@1"
 [judge]  # stronger than the generator, pinned per run
 backend = "claude-cli"
 model = "claude-opus-5-5"
+prompt = "judge@1"
 
 [execution]  # not part of the config hash
 concurrency = 2

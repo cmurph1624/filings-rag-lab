@@ -77,7 +77,7 @@ def cfg(**execution: int):  # type: ignore[no-untyped-def]
             "questions": QSET,
             "retriever": {"kind": "vector", "k": 3},
             "generation": {"backend": "fake", "model": "claude-sonnet-5-5", "prompt": "answer@1"},
-            "judge": {"backend": "fake", "model": "claude-opus-5-5"},
+            "judge": {"backend": "fake", "model": "claude-opus-5-5", "prompt": "judge@1"},
             "execution": execution,
         }
     )
@@ -230,3 +230,48 @@ def test_vector_retriever_wraps_db_errors_with_spend(conn: psycopg.Connection) -
         r.retrieve("w1")
     assert info.value.embed_tokens == 3
     conn.rollback()
+
+
+class FakeJudge:
+    name = "fake"
+    model = "claude-opus-5-5"
+
+    def __init__(self, replies: dict[str, str]) -> None:
+        self.replies = replies
+        self.calls = 0
+
+    def generate(self, system: str, prompt: str) -> Result:
+        self.calls += 1
+        text = next((r for q, r in self.replies.items() if q in prompt), '{"verdict": "correct"}')
+        return Result(text, Usage(input_tokens=50, output_tokens=5), 0.02, self.model, "end_turn")
+
+
+def test_judge_then_report(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.eval.judge import judge_run
+    from filings_rag.eval.report import render, summarize
+    from filings_rag.harness.prompts import get_judge_prompt
+
+    c = cfg()
+    rid, _ = run(conn, FakeBackend(fail={QIDS[3]}))
+    j = FakeJudge({QIDS[1]: '{"verdict": "incorrect", "rationale": "wrong year"}', QIDS[2]: "??"})
+    s = judge_run(conn, rid, c.judge_key, j, get_judge_prompt("judge@1"), log=lambda s: None)
+    assert (s.judged, s.failed, s.skipped, j.calls) == (2, 1, 0, 3)  # QIDS[3] has no answer
+    again = FakeJudge({})
+    s2 = judge_run(conn, rid, c.judge_key, again, get_judge_prompt("judge@1"), log=lambda s: None)
+    assert (s2.judged, s2.skipped, again.calls) == (1, 2, 1)  # only the unparseable one retried
+    assert conn.execute(
+        "SELECT attempts, verdict, input_tokens FROM judgments"
+        " WHERE run_id = %s AND question_id = %s",
+        (rid, QIDS[2]),
+    ).fetchone() == (2, "correct", 100)
+
+    summary = summarize(conn, rid)
+    assert (summary.total, summary.answered, summary.errors, summary.correct) == (4, 3, 1, 2)
+    assert summary.verdicts["incorrect"] == 1
+    plain = summary.gen_cost["plain API"]
+    assert plain == pytest.approx(3 * (100 * 2 + 10 * 10) / 1e6)
+    assert summary.gen_cost["Batch API"] == pytest.approx(plain / 2)
+    assert summary.retrieval == [] and summary.unlabelled == 3  # no evidence labels in this set
+    md = render([summary, summary])
+    assert "open subset" in md and "| accuracy | 50.0% (2/4) | 50.0% (2/4) |" in md
+    assert "Batch API: per correct answer" in md

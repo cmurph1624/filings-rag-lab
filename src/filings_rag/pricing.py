@@ -71,3 +71,14 @@ def embedding_cost(model: str, tokens: int, prices: dict[str, Any] | None = None
     if model not in table:
         raise KeyError(f"no price for embedding model {model!r}; add it to config/prices.toml")
     return float(PER_TOKEN * tokens * table[model]["input"])
+
+
+def plain_api_cost(model: str, usage: Usage, prices: dict[str, Any] | None = None) -> float:
+    """What the same tokens cost as an ordinary API call with no prompt caching."""
+    return model_cost(model, Usage(usage.prompt_tokens, usage.output_tokens), prices)
+
+
+def batch_api_cost(model: str, usage: Usage, prices: dict[str, Any] | None = None) -> float:
+    """The same uncached call through the Batch API."""
+    table = prices or load_prices()
+    return plain_api_cost(model, usage, table) * float(table["batch_discount"])

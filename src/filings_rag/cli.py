@@ -1,6 +1,7 @@
 import csv
 from collections import Counter
 from pathlib import Path
+from typing import Annotated
 
 import psycopg
 import typer
@@ -13,10 +14,11 @@ from filings_rag.edgar import fetch, resolve
 from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
-from filings_rag.eval import labels
+from filings_rag.eval import judge as judging
+from filings_rag.eval import labels, report
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
-from filings_rag.harness.prompts import get_prompt
+from filings_rag.harness.prompts import get_judge_prompt, get_prompt
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
@@ -176,6 +178,55 @@ def run_cmd(
     )
     if s.failed or s.stopped_early:
         raise typer.Exit(1)
+
+
+@app.command("judge")
+def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
+    """Grade a run's answers with the judge pinned in its config (resumable)."""
+    with psycopg.connect(get_settings().database_url) as conn:
+        row = conn.execute("SELECT config FROM runs WHERE id = %s", (run_id,)).fetchone()
+        if row is None:
+            typer.echo(f"no run {run_id}", err=True)
+            raise typer.Exit(1)
+        try:
+            cfg = run_config.from_dict(row[0])
+        except ValueError as e:  # e.g. runs stored before judge prompts were versioned
+            typer.echo(f"run {run_id}'s stored config no longer loads ({e}); re-run it", err=True)
+            raise typer.Exit(1) from e
+        typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
+        s = judging.judge_run(
+            conn,
+            run_id,
+            cfg.judge_key,
+            make_backend(cfg.judge_spec),
+            get_judge_prompt(cfg.judge["prompt"]),
+            concurrency=cfg.execution["concurrency"],
+            log=typer.echo,
+        )
+    typer.echo(
+        f"run {run_id}: {s.judged} judged, {s.failed} failed, {s.skipped} already judged;"
+        f" judge cost ${s.cost:.4f} (API-equivalent)"
+    )
+    if s.failed:
+        raise typer.Exit(1)
+
+
+@app.command("report")
+def report_cmd(
+    run_id: int = typer.Argument(..., help="Run to report on"),
+    vs: Annotated[list[int] | None, typer.Option(help="Other runs alongside (repeatable)")] = None,
+    out: str = typer.Option("", help="Also write the markdown to this file"),
+) -> None:
+    """Accuracy, retrieval recall, cost and latency for one or more runs, as markdown."""
+    with psycopg.connect(get_settings().database_url) as conn:
+        try:
+            text = report.render([report.summarize(conn, r) for r in [run_id, *(vs or [])]])
+        except ValueError as e:  # unknown run, or a stored config that no longer loads
+            typer.echo(f"cannot report: {e}", err=True)
+            raise typer.Exit(1) from e
+    if out:
+        Path(out).write_text(text)
+    typer.echo(text)
 
 
 if __name__ == "__main__":
