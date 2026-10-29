@@ -79,3 +79,22 @@ def test_a_long_table_splits_by_rows_repeating_caption_and_header() -> None:
         assert len(c.text.split()) <= 120 + 10
     items = [ln for c in chunks for ln in c.text.split("\n") if ln.startswith("Line item")]
     assert items == [f"Line item {i} | {i},000 | {i},500" for i in range(60)]  # each row once
+
+
+def test_a_fourth_label_line_in_a_row_ends_the_table() -> None:
+    rows = "Row a | 1\nRow b | 2\nRow c | 3\n"
+    # Labels long enough that the stretch after the table isn't folded back in as a footer.
+    labels = [f"Section label number {n} of this statement" for n in range(4)]  # 7 words each
+    three = rows + "\n".join(labels[:3]) + "\nRow d | 4"
+    four = rows + "\n".join(labels) + "\nRow d | 4"
+    assert [(s.kind, s.last) for s in TablePreserving().segments(_lines(three))] == [("table", 6)]
+    segs = TablePreserving().segments(_lines(four))
+    assert [(s.kind, s.first, s.last) for s in segs] == [("table", 0, 2), ("prose", 3, 7)]
+
+
+def test_a_footer_after_a_long_table_lands_in_its_last_group() -> None:
+    rows = "\n".join(f"Line item {i} | {i},000 | {i},500" for i in range(60))
+    body = "Segment Revenue\n(Millions) | 2022 | 2021\n" + rows + "\nSee accompanying notes.\n7"
+    chunks = TablePreserving(max_table_words=120).chunk(_doc(body))
+    assert chunks[-1].text.endswith("Line item 59 | 59,000 | 59,500\nSee accompanying notes.\n7")
+    assert sum("See accompanying notes." in c.text for c in chunks) == 1

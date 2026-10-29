@@ -15,7 +15,10 @@ next). The extractor (`edgar-html@1`) renders each table row as one line with ce
   Consolidated Financial Statements.", a page number) joins the table before it;
 - a table of at most `max_table_words` words is one chunk. A longer one is split into row
   groups; each later group's text starts with the caption and the first row (usually the
-  column headings) so it still reads as part of that table. Offsets cover the group's own rows;
+  column headings) so it still reads as part of that table. Offsets cover the group's own rows.
+  `max_table_words` bounds a group's rows; a later group's text can exceed it by its repeated
+  header, and each later group holds at least as many lines as that header (built behaviour of
+  version 1, pinned: changing it means a new version);
 - everything else is prose, windowed like naive-fixed.
 """
 
