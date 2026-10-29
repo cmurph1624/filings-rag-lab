@@ -114,7 +114,10 @@ def conn():  # type: ignore[no-untyped-def]
         c.execute("DELETE FROM runs WHERE name = 'zz-run'")
         c.execute("DELETE FROM query_scopes WHERE question_id LIKE 'zz_run_%%'")
         c.execute("DELETE FROM questions WHERE benchmark = %s", (QSET,))
-        c.execute("DROP TABLE IF EXISTS chunks__zz_run__v1")
+        c.execute(
+            "DROP TABLE IF EXISTS chunks__zz_run__v1, chunks__zz_run__v1_postings,"
+            " chunks__zz_run__v1_lengths"
+        )
         c.execute("DELETE FROM pipelines WHERE name = 'zz-run'")
         c.execute("DELETE FROM documents WHERE accession = 'zzrun-1'")
         c.execute("DELETE FROM benchmark_docs WHERE doc_name = %s", (DOC,))

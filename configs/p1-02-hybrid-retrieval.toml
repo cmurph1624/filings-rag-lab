@@ -1,0 +1,9 @@
+# Retrieval-only: p1-00 (fb-distractors@1) with vector + BM25, fused by RRF (k=60) over 50 candidates each.
+name = "p1-02-hybrid-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "hybrid"
+k = 10

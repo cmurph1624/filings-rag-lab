@@ -69,7 +69,11 @@ def conn():  # type: ignore[no-untyped-def]
         c.commit()
         yield c
         c.rollback()
-        c.execute("DROP TABLE IF EXISTS chunks__zz_test__v1, chunks__zz_test__v2")
+        c.execute(
+            "DROP TABLE IF EXISTS chunks__zz_test__v1, chunks__zz_test__v2,"
+            " chunks__zz_test__v1_postings, chunks__zz_test__v1_lengths,"
+            " chunks__zz_test__v2_postings, chunks__zz_test__v2_lengths"
+        )
         c.execute("DELETE FROM pipelines WHERE name = 'zz-test'")
         c.execute("DELETE FROM documents WHERE accession IN ('zz-1', 'zz-2')")
         c.execute("DELETE FROM benchmark_docs WHERE doc_name IN (%s, %s)", (DOC, DOC2))

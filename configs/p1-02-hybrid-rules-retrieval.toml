@@ -1,0 +1,12 @@
+# Retrieval-only: hybrid (vector + BM25, RRF) within the rules scope from PR 3.
+name = "p1-02-hybrid-rules-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "hybrid"
+k = 10
+
+[retriever.scope]
+mode = "rules"

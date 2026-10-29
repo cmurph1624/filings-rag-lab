@@ -68,7 +68,7 @@ def conn(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
         yield c
         c.rollback()
         c.execute("DELETE FROM corpora WHERE name LIKE 'zz-%'")
-        c.execute(f"DROP TABLE IF EXISTS {TABLE}")
+        c.execute(f"DROP TABLE IF EXISTS {TABLE}, {TABLE}_postings, {TABLE}_lengths")
         c.execute("DELETE FROM pipelines WHERE name = 'zz-corp'")
         c.execute("DELETE FROM documents WHERE accession LIKE 'zzc-%'")
         c.execute("DELETE FROM benchmark_docs WHERE doc_name = %s", (GOLD,))

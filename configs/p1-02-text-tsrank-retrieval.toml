@@ -1,0 +1,10 @@
+# Retrieval-only comparison: Postgres ts_rank_cd over an OR of lexemes (no IDF). Shows why BM25 is needed.
+name = "p1-02-text-tsrank-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "text"
+k = 10
+ranking = "ts_rank_cd"
