@@ -64,8 +64,8 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
     unknown = raw.keys() - REQUIRED - OPTIONAL
     if unknown:
         raise ValueError(f"run config has unknown keys {sorted(unknown)}")
-    if "judge" in raw and "generation" not in raw:
-        raise ValueError("[judge] needs a [generation] to judge")
+    if ("judge" in raw) != ("generation" in raw):  # an unjudged run's spend could never be scored
+        raise ValueError("[generation] and [judge] go together; omit both for a retrieval-only run")
     for table in ("generation", "judge"):
         for key in ("backend", "model", "prompt"):
             if table in raw and key not in raw[table]:

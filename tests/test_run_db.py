@@ -297,3 +297,4 @@ def test_retrieval_only_run(conn: psycopg.Connection) -> None:  # type: ignore[t
     assert "## Retrieval" in md and "## Answers" not in md and "## Cost" not in md
     full = render([summarize(conn, rid)])
     assert "| accuracy | – |" in full and "retrieval only" in full
+    assert "| not judged | – |" in full and "| plain API: per question | – |" in full

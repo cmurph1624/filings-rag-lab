@@ -121,5 +121,7 @@ def test_retrieval_only_config() -> None:
     assert cfg.generation is None and cfg.judge is None
     assert cfg.backend_spec is None and cfg.judge_key is None
     assert cfg.hash != from_dict(base()).hash
-    with pytest.raises(ValueError, match="needs a \\[generation\\]"):
+    with pytest.raises(ValueError, match="go together"):
         from_dict({**raw, "judge": base()["judge"]})
+    with pytest.raises(ValueError, match="go together"):
+        from_dict({**raw, "generation": base()["generation"]})

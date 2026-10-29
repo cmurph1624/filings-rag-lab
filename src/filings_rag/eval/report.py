@@ -206,6 +206,11 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
 Rows = Any  # the `rows` helper inside render
 
 
+def _gen(fn: Any) -> Any:
+    """Answer and cost cells read "–" for a retrieval-only run instead of zeros."""
+    return lambda s: fn(s) if s.generated else "–"
+
+
 def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     out = [
         "## Answers",
@@ -215,10 +220,10 @@ def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
         _table(
             heads,
             rows(
-                ("accuracy", lambda s: _pct(s.correct, s.total) if s.generated else "–"),
-                ("incorrect", lambda s: str(s.verdicts["incorrect"])),
-                ("refused", lambda s: str(s.verdicts["refused"])),
-                ("not judged", lambda s: str(s.total - sum(s.verdicts.values()))),
+                ("accuracy", _gen(lambda s: _pct(s.correct, s.total))),
+                ("incorrect", _gen(lambda s: str(s.verdicts["incorrect"]))),
+                ("refused", _gen(lambda s: str(s.verdicts["refused"]))),
+                ("not judged", _gen(lambda s: str(s.total - sum(s.verdicts.values())))),
             ),
         ),
         "",
@@ -244,8 +249,8 @@ def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str
         "",
         "Against FinanceBench evidence passages mapped to the pipeline's chunks. recall@k: share "
         "of a question's evidence passages found in the top k. hit@k: any passage found. These "
-        "are conservative: an answer can also come from a passage that repeats the same figure "
-        "(see docs/results/p0-label-audit.md).",
+        "are a proxy: an answer can also come from a passage that repeats the same figure, and "
+        "a partial overlap can count as a hit (see docs/results/p0-label-audit.md).",
         "",
         _table(
             heads,
@@ -270,16 +275,16 @@ def _costs(heads: list[str], rows: Rows) -> list[str]:
     cost_rows: list[tuple[str, Any]] = []
     for v in COST_VIEWS:
         cost_rows += [
-            (f"{v}: answering, total", lambda s, v=v: _usd(s.system_cost(v))),
+            (f"{v}: answering, total", _gen(lambda s, v=v: _usd(s.system_cost(v)))),
             (
                 f"{v}: per question",
-                lambda s, v=v: _usd(s.system_cost(v) / s.answered if s.answered else None),
+                _gen(lambda s, v=v: _usd(s.system_cost(v) / s.answered if s.answered else None)),
             ),
             (
                 f"{v}: per correct answer",
-                lambda s, v=v: _usd(s.system_cost(v) / s.correct if s.correct else None),
+                _gen(lambda s, v=v: _usd(s.system_cost(v) / s.correct if s.correct else None)),
             ),
-            (f"{v}: judge, total", lambda s, v=v: _usd(s.judge_cost[v])),
+            (f"{v}: judge, total", _gen(lambda s, v=v: _usd(s.judge_cost[v]))),
         ]
     return [
         "## Cost",
