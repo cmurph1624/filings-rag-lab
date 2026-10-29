@@ -16,6 +16,7 @@ from filings_rag.ingest.base import Doc, IngestPipeline, chunk_table
 @dataclass
 class BuildStats:
     documents: int = 0
+    empty: int = 0
     chunks: int = 0
     embed_tokens: int = 0
 
@@ -86,23 +87,29 @@ def build(
     conn.commit()  # close the read's implicit transaction so each document commits on its own
     for doc_id, doc_name, body, pages in rows:
         chunks = p.chunk(Doc(doc_id, body, list(pages)))
+        if not chunks:  # nothing to embed; would otherwise be retried on every run
+            stats.empty += 1
+            log(f"  {doc_name:40} no text, skipped")
+            continue
         out = e.embed([c.text for c in chunks], "document")
-        with conn.transaction():  # a real transaction per document: a crash resumes cleanly
-            with conn.cursor() as cur:
-                cur.executemany(
-                    sql.SQL(
-                        "INSERT INTO {t} (document_id, ord, char_start, char_end, page, text,"
-                        " embedding) VALUES (%s, %s, %s, %s, %s, %s, %s::vector)"
-                    ).format(t=t),
-                    [
-                        (doc_id, c.ord, c.char_start, c.char_end, c.page, c.text, _vec(v))
-                        for c, v in zip(chunks, out.vectors, strict=True)
-                    ],
-                )
-            conn.execute(
-                "UPDATE pipelines SET embed_tokens = embed_tokens + %s"
-                " WHERE name = %s AND version = %s",
-                (out.tokens, p.name, p.version),
+        # Record spend first, in its own commit: tokens count as spent even if the insert fails.
+        conn.execute(
+            "UPDATE pipelines SET embed_tokens = embed_tokens + %s"
+            " WHERE name = %s AND version = %s",
+            (out.tokens, p.name, p.version),
+        )
+        conn.commit()
+        # A real transaction per document: a crash resumes cleanly.
+        with conn.transaction(), conn.cursor() as cur:
+            cur.executemany(
+                sql.SQL(
+                    "INSERT INTO {t} (document_id, ord, char_start, char_end, page, text,"
+                    " embedding) VALUES (%s, %s, %s, %s, %s, %s, %s::vector)"
+                ).format(t=t),
+                [
+                    (doc_id, c.ord, c.char_start, c.char_end, c.page, c.text, _vec(v))
+                    for c, v in zip(chunks, out.vectors, strict=True)
+                ],
             )
         stats.documents += 1
         stats.chunks += len(chunks)

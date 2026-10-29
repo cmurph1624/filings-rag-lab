@@ -7,6 +7,7 @@ from psycopg.types.json import Jsonb
 from filings_rag import db
 from filings_rag.embed.base import Embeddings, InputType
 from filings_rag.extract.html import EXTRACTOR
+from filings_rag.ingest.base import Chunk, Doc
 from filings_rag.ingest.build import build, register
 from filings_rag.ingest.naive_fixed import NaiveFixed
 
@@ -35,6 +36,13 @@ class FailingEmbedder(FakeEmbedder):
         if self.calls == 1:
             raise RuntimeError("embedding API down")
         return super().embed(texts, input_type)
+
+
+class EmptyDocPipe(NaiveFixed):
+    name = "zz-test"
+
+    def chunk(self, doc: Doc) -> list[Chunk]:
+        return []
 
 
 class ZzPipe(NaiveFixed):
@@ -102,3 +110,24 @@ def test_each_document_commits_on_its_own(conn: psycopg.Connection) -> None:  # 
     # and a rerun picks up only the missing document
     stats = build(conn, p, FakeEmbedder(), docs=[DOC, DOC2], log=lambda s: None)
     assert stats.documents == 1
+
+
+def test_empty_document_is_skipped_not_retried(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    e = FakeEmbedder()
+    stats = build(conn, EmptyDocPipe(version=1), e, docs=[DOC], log=lambda s: None)
+    assert (stats.documents, stats.empty, e.calls) == (0, 1, 0)
+
+
+def test_tokens_recorded_even_when_insert_fails(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    class BadVectors(FakeEmbedder):
+        def embed(self, texts: list[str], input_type: InputType) -> Embeddings:
+            self.calls += 1
+            return Embeddings([[1.0] * 3 for _ in texts], tokens=40)  # wrong dims: insert fails
+
+    p = ZzPipe(version=1, window_words=10, overlap_words=2)
+    with pytest.raises(psycopg.Error):
+        build(conn, p, BadVectors(), docs=[DOC], log=lambda s: None)
+    conn.rollback()
+    assert conn.execute(
+        "SELECT embed_tokens FROM pipelines WHERE name = 'zz-test' AND version = 1"
+    ).fetchone() == (40,)

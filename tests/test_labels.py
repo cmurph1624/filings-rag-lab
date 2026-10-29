@@ -1,4 +1,4 @@
-from filings_rag.eval.labels import match, norm, shingles
+from filings_rag.eval.labels import is_broad, match, norm, shingles
 
 
 def test_norm_ignores_spacing_and_punctuation() -> None:
@@ -36,3 +36,9 @@ def test_match_partial_and_unrelated() -> None:
     coverage, inside = match(EVIDENCE, first_half)
     assert 0.25 < coverage < 0.75 and inside < 0.5
     assert match(EVIDENCE, norm("Item 1A. Risk Factors " * 20)) == (0.0, 0.0)
+
+
+def test_short_passage_matching_many_chunks_is_flagged() -> None:
+    short = "Total net revenue 4,571,543"
+    assert is_broad(short, 3) and not is_broad(short, 2)
+    assert not is_broad(EVIDENCE * 3, 10)  # long passages may legitimately span many chunks

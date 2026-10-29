@@ -22,6 +22,7 @@ SHINGLE = 40
 STEP = 20
 COVERAGE_MIN = 0.25
 INSIDE_MIN = 0.5
+BROAD_LABELS = 2  # a short passage matching more chunks than this is flagged as too generic
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
@@ -46,6 +47,11 @@ def match(evidence: str, chunk: str) -> tuple[float, float]:
     return coverage, inside
 
 
+def is_broad(evidence: str, n_labels: int) -> bool:
+    """Short passages are one or two shingles; matching many chunks means they're too generic."""
+    return len(norm(evidence)) <= 2 * SHINGLE and n_labels > BROAD_LABELS
+
+
 @dataclass
 class LabelReport:
     items: int = 0
@@ -54,6 +60,7 @@ class LabelReport:
     page_checked: int = 0
     page_agree: int = 0
     missing: list[str] = field(default_factory=list)
+    broad: list[str] = field(default_factory=list)  # short passages that matched many chunks
 
 
 def label(conn: psycopg.Connection[Any], p: IngestPipeline) -> LabelReport:
@@ -89,6 +96,8 @@ def label(conn: psycopg.Connection[Any], p: IngestPipeline) -> LabelReport:
                 continue
             report.labelled += 1
             report.labels += len(hits)
+            if is_broad(ev["evidence_text"], len(hits)):
+                report.broad.append(f"{qid}#{idx} {ev['doc_name']} ({len(hits)} chunks)")
             fb_page = ev.get("evidence_page_num")
             if isinstance(fb_page, int):
                 # FinanceBench pages are 0-based, ours 1-based; a chunk may start a page early.

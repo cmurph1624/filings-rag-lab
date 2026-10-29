@@ -108,7 +108,7 @@ def ingest_build(
         stats = build.build(conn, p, embedder, docs=[only] if only else None, log=typer.echo)
     cost = embedding_cost(embedder.name, stats.embed_tokens)
     typer.echo(
-        f"{pipeline}: {stats.documents} documents, {stats.chunks:,} chunks, "
+        f"{pipeline}: {stats.documents} documents ({stats.empty} empty), {stats.chunks:,} chunks, "
         f"{stats.embed_tokens:,} embedding tokens (${cost:.2f} at list)"
     )
 
@@ -125,6 +125,8 @@ def ingest_label(pipeline: str = typer.Argument(..., help="name@version")) -> No
     )
     for m in r.missing:
         typer.echo(f"  unlabelled {m}")
+    for b in r.broad:
+        typer.echo(f"  too generic (short passage, many chunks) {b}")
 
 
 if __name__ == "__main__":
