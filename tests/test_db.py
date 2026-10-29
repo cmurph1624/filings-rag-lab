@@ -19,3 +19,8 @@ def test_migrate_is_idempotent() -> None:
     url = os.environ["DATABASE_URL"]
     db.migrate(url)
     assert db.migrate(url) == []
+
+
+def test_migrate_refuses_empty_directory(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        db.migrate("postgresql://unused", tmp_path)

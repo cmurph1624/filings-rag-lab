@@ -21,8 +21,13 @@ def pending(applied: set[str], directory: Path = MIGRATIONS_DIR) -> list[Path]:
 
 def migrate(database_url: str, directory: Path = MIGRATIONS_DIR) -> list[str]:
     """Apply pending migrations, each in its own transaction. Returns the names applied."""
+    if not any(directory.glob("*.sql")):
+        # Guards against a non-editable install pointing at a directory with no migrations.
+        raise FileNotFoundError(f"no migrations found in {directory}")
     done: list[str] = []
     with psycopg.connect(database_url) as conn:
+        # Serialize concurrent runs; released when the connection closes.
+        conn.execute("SELECT pg_advisory_lock(hashtext('frl_migrations'))")
         conn.execute(_LEDGER)
         conn.commit()
         rows = conn.execute("SELECT name FROM schema_migrations").fetchall()
