@@ -8,7 +8,7 @@ as_of = "2026-10-29"
 [models.claude-opus-5-5]
 input = 4.00
 output = 20.00          # thinking tokens bill as output
-cache_read = 0.20
+cache_read = 0.20       # 0.05x input (below the usual 0.1x); confirmed against claude -p cost
 cache_write = 5.00      # derived: 5-minute cache write = 1.25x input
 cache_write_1h = 8.00   # derived: 1-hour cache write = 2x input (matches claude -p reported cost)
 
@@ -25,7 +25,7 @@ output = 0.50
 cache_read = 0.01       # derived: 0.1x input (not in the source table)
 cache_write = 0.125     # derived: 1.25x input
 cache_write_1h = 0.20    # derived: 2x input
-# Prompts over 100K tokens bill at the long-context rate.
+# Prompts over 100K tokens bill at the long-context rate; cache rates scale by long_input/input.
 long_context_threshold = 100_000
 long_input = 0.50
 long_output = 2.50

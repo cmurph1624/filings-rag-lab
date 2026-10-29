@@ -25,8 +25,12 @@ def test_child_env_strips_api_keys_and_session_vars() -> None:
     env = {
         "PATH": "/bin", "HOME": "/h", "ANTHROPIC_API_KEY": "sk", "ANTHROPIC_AUTH_TOKEN": "t",
         "ANTHROPIC_BASE_URL": "u", "CLAUDE_EFFORT": "max", "CLAUDE_CODE_SESSION_ID": "x",
+        "CLAUDE_CONFIG_DIR": "/cfg", "CLAUDE_CODE_OAUTH_TOKEN": "oauth",
     }  # fmt: skip
-    assert child_env(env) == {"PATH": "/bin", "HOME": "/h"}
+    assert child_env(env) == {
+        "PATH": "/bin", "HOME": "/h",
+        "CLAUDE_CONFIG_DIR": "/cfg", "CLAUDE_CODE_OAUTH_TOKEN": "oauth",
+    }  # fmt: skip
 
 
 def test_cli_runs_isolated_with_prompt_on_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,6 +62,9 @@ def test_cli_parse_errors() -> None:
     err = {**CLI_OK, "is_error": True, "subtype": "error_during_execution"}
     with pytest.raises(BackendError):
         parse_output(json.dumps(err), 1, "", 0.1, "m")
+    two = {**CLI_OK, "modelUsage": {"claude-sonnet-5-5": {}, "claude-haiku-5-5": {}}}
+    with pytest.raises(BackendError, match="several models"):
+        parse_output(json.dumps(two), 0, "", 0.1, "claude-sonnet-5-5")
     # warnings printed before the JSON line are tolerated
     assert parse_output("warning line\n" + json.dumps(CLI_OK), 0, "", 0.1, "m").text == "391"
 
@@ -111,20 +118,21 @@ def test_factory() -> None:
 
 
 def test_price_table_matches_cli_reported_cost() -> None:
-    """Real results from the 2026-10-29 smoke test: our list-price cost == the CLI's."""
+    """Raw `claude -p` results from 2026-10-29: our list-price cost == the CLI's reported cost."""
     from filings_rag.pricing import model_cost
 
     samples = [
-        # (model, input, output, 1h cache writes, CLI total_cost_usd)
-        ("claude-sonnet-5-5", 430, 3, 0, 0.00089),
-        ("claude-sonnet-5-5", 2, 4, 555, 0.00226),
-        ("claude-opus-5-5", 2, 4, 551, 0.00450),
+        # (model, input, output, cache reads, 1h cache writes, CLI total_cost_usd)
+        ("claude-sonnet-5-5", 430, 3, 0, 0, 0.00089),
+        ("claude-opus-5-5", 2, 3, 0, 4733, 0.037932),
+        ("claude-opus-5-5", 2, 3, 4429, 305, 0.0033938),  # cache-read rate pinned here
     ]
-    for model, inp, out, w1h, reported in samples:
+    for model, inp, out, reads, w1h, reported in samples:
         raw = {**CLI_OK, "total_cost_usd": reported,
                "usage": {"input_tokens": inp, "output_tokens": out,
+                         "cache_read_input_tokens": reads,
                          "cache_creation_input_tokens": w1h,
                          "cache_creation": {"ephemeral_1h_input_tokens": w1h}},
                "modelUsage": {model: {}}}  # fmt: skip
         r = parse_output(json.dumps(raw), 0, "", 0.1, model)
-        assert model_cost(r.model, r.usage) == pytest.approx(reported, abs=5e-6)
+        assert model_cost(r.model, r.usage) == pytest.approx(reported, abs=1e-7)

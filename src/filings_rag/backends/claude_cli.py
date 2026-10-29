@@ -6,7 +6,8 @@ system prompt, so token counts reflect the prompt rather than Claude Code's cont
 
 Auth: the child process gets no ANTHROPIC_* variables. If ANTHROPIC_API_KEY (or a token or
 base URL) is set, Claude Code uses it ahead of the subscription login and "subscription" runs
-bill the API. CLAUDE_* session variables are dropped too (CLAUDE_EFFORT overrides --effort).
+bill the API. CLAUDE_* session variables are dropped too (CLAUDE_EFFORT overrides --effort),
+except the two that locate the subscription login itself.
 """
 
 import json
@@ -22,10 +23,11 @@ from filings_rag.pricing import Usage
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 STRIP_PREFIXES = ("ANTHROPIC_", "CLAUDE_")
+KEEP = frozenset({"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"})  # subscription login
 
 
 def child_env(env: Mapping[str, str]) -> dict[str, str]:
-    return {k: v for k, v in env.items() if not k.startswith(STRIP_PREFIXES)}
+    return {k: v for k, v in env.items() if k in KEEP or not k.startswith(STRIP_PREFIXES)}
 
 
 class ClaudeCliBackend:
@@ -96,7 +98,11 @@ def parse_output(stdout: str, returncode: int, stderr: str, latency: float, mode
     u = data.get("usage", {})
     writes = int(u.get("cache_creation_input_tokens", 0))
     writes_1h = int((u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens", 0))
-    served = next(iter(data.get("modelUsage", {})), model)
+    models = list(data.get("modelUsage") or {}) or [model]
+    if len(models) > 1:
+        # Aggregate usage would mix models under one label and one price.
+        raise BackendError(f"claude -p used several models in one call: {models}")
+    served = models[0]
     return Result(
         text=str(data.get("result", "")),
         usage=Usage(

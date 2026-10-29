@@ -12,7 +12,7 @@ Read it before changing architecture. Retrieval is the focus; the harness makes 
 - Schema changes are new files in `migrations/NNN_name.sql`. Never edit an applied migration.
 - Plain SQL with psycopg 3; no ORM.
 - Anything that varies between experiments (pipeline, retriever, model, judge) is config, not a code path.
-- Every model or embedding call records tokens. Cost is API-equivalent from `prices.yaml`,
+- Every model or embedding call records tokens. Cost is API-equivalent from `config/prices.toml`,
   even for `claude-cli` (subscription) runs.
 - Ingest pipelines are versioned; each version writes to its own namespace. Bump the version
   instead of changing a pipeline's output in place.

@@ -7,7 +7,7 @@ PRICES = {
         "m": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5,
               "cache_write_1h": 4.0},
         "tiered": {
-            "input": 0.1, "output": 0.5, "long_context_threshold": 100,
+            "input": 0.1, "output": 0.5, "cache_read": 0.01, "long_context_threshold": 100,
             "long_input": 0.5, "long_output": 2.5,
         },
     },
@@ -26,6 +26,9 @@ def test_long_context_rate_applies_over_threshold() -> None:
     long = Usage(input_tokens=101, output_tokens=10)
     assert model_cost("tiered", short, PRICES) == pytest.approx((100 * 0.1 + 10 * 0.5) / 1e6)
     assert model_cost("tiered", long, PRICES) == pytest.approx((101 * 0.5 + 10 * 2.5) / 1e6)
+    # cached tokens count toward the threshold and scale to the long rate (0.01 * 5)
+    cached = Usage(input_tokens=1, output_tokens=0, cache_read_tokens=200)
+    assert model_cost("tiered", cached, PRICES) == pytest.approx((1 * 0.5 + 200 * 0.05) / 1e6)
 
 
 def test_unknown_model_raises_instead_of_costing_zero() -> None:
