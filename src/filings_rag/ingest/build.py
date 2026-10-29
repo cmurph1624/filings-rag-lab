@@ -8,7 +8,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from filings_rag.embed.base import Embedder
+from filings_rag.embed.base import Embedder, to_pgvector
 from filings_rag.extract.html import EXTRACTOR
 from filings_rag.ingest.base import Doc, IngestPipeline, chunk_table
 
@@ -60,10 +60,6 @@ def register(conn: psycopg.Connection[Any], p: IngestPipeline, e: Embedder) -> s
     return table
 
 
-def _vec(v: list[float]) -> str:
-    return "[" + ",".join(f"{x:.7g}" for x in v) + "]"
-
-
 def build(
     conn: psycopg.Connection[Any],
     p: IngestPipeline,
@@ -107,7 +103,7 @@ def build(
                     " embedding) VALUES (%s, %s, %s, %s, %s, %s, %s::vector)"
                 ).format(t=t),
                 [
-                    (doc_id, c.ord, c.char_start, c.char_end, c.page, c.text, _vec(v))
+                    (doc_id, c.ord, c.char_start, c.char_end, c.page, c.text, to_pgvector(v))
                     for c, v in zip(chunks, out.vectors, strict=True)
                 ],
             )

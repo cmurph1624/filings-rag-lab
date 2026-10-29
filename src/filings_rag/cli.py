@@ -6,15 +6,21 @@ import psycopg
 import typer
 
 from filings_rag import db
+from filings_rag.backends.factory import make_backend
 from filings_rag.benchmark import financebench
 from filings_rag.config import get_settings
 from filings_rag.edgar import fetch, resolve
 from filings_rag.edgar.client import EdgarClient
+from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import labels
+from filings_rag.harness import config as run_config
+from filings_rag.harness import run as harness
+from filings_rag.harness.prompts import get_prompt
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
+from filings_rag.retrieve.factory import make_retriever
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -127,6 +133,49 @@ def ingest_label(pipeline: str = typer.Argument(..., help="name@version")) -> No
         typer.echo(f"  unlabelled {m}")
     for b in r.broad:
         typer.echo(f"  too generic (short passage, many chunks) {b}")
+
+
+@app.command("run")
+def run_cmd(
+    config: str = typer.Argument(..., help="Run config, e.g. configs/p0-naive.toml"),
+    limit: int | None = typer.Option(None, help="Only the first N questions (by id)"),
+    resume: int | None = typer.Option(None, help="Continue this run id"),
+) -> None:
+    """Answer the question set with one config and record everything in `runs`."""
+    cfg = run_config.load(Path(config))
+    settings = get_settings()
+    git = harness.git_info(ROOT)
+    if git.dirty:
+        typer.echo("warning: uncommitted changes; the recorded git SHA won't reproduce this run")
+    with psycopg.connect(settings.database_url) as conn:
+        table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
+        retriever = make_retriever(
+            conn, cfg.retriever, table, make_embedder(embedder_name, dims, settings)
+        )
+        backend = make_backend(cfg.backend_spec)
+        prompt = get_prompt(cfg.generation["prompt"])
+        if resume is not None:
+            harness.check_resume(conn, resume, cfg)
+            run_id = resume
+        else:
+            run_id = harness.create_run(conn, cfg, git)
+        typer.echo(f"run {run_id}: {cfg.name} (config {cfg.hash})")
+        s = harness.execute(
+            conn, run_id, cfg, retriever, backend, prompt, git, limit=limit, log=typer.echo
+        )
+    u = s.usage
+    typer.echo(
+        f"run {run_id}: {s.answered} answered, {s.failed} failed, {s.skipped} already done"
+        f"{' (stopped early)' if s.stopped_early else ''}{' — complete' if s.finished else ''}\n"
+        f"  tokens: {u.input_tokens:,} in, {u.output_tokens:,} out, {u.cache_read_tokens:,} cache"
+        f" read, {u.cache_write_tokens + u.cache_write_1h_tokens:,} cache write;"
+        f" {s.embed_tokens:,} query-embedding\n"
+        f"  API-equivalent cost: ${s.gen_cost + s.embed_cost:.4f}"
+        f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f});"
+        f" backend reported ${s.reported_cost:.4f}"
+    )
+    if s.failed or s.stopped_early:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
