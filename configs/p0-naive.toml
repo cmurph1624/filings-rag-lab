@@ -2,6 +2,7 @@
 name = "p0-naive"
 pipeline = "naive-fixed@1"
 questions = "financebench-open"
+corpus = "fb-gold@1"  # the 84 question filings (the default)
 
 [retriever]
 kind = "vector"

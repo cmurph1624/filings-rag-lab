@@ -26,8 +26,14 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_retriever(
-    conn: psycopg.Connection[Any], spec: dict[str, Any], table: str, embedder: Embedder
+    conn: psycopg.Connection[Any],
+    spec: dict[str, Any],
+    table: str,
+    embedder: Embedder,
+    documents: list[int] | None = None,
 ) -> Retriever:
-    """Build a retriever from a run config's [retriever] table: {kind, ...options}."""
+    """Build a retriever from a run config's [retriever] table: {kind, ...options}.
+
+    `documents` limits it to a corpus's filings (`corpora.document_ids`)."""
     opts = {k: v for k, v in resolve_spec(spec).items() if k != "kind"}
-    return VectorRetriever(conn, table, embedder, **opts)
+    return VectorRetriever(conn, table, embedder, documents=documents, **opts)

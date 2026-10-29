@@ -1,0 +1,24 @@
+# P1 baseline: the P0 config over the distractor corpus (84 question filings + 283 others).
+name = "p1-00-naive-distractors"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+search = "exact"  # true top-k; "hnsw" is the approximate index
+
+[generation]
+backend = "claude-cli"
+model = "claude-sonnet-5-5"
+prompt = "answer@1"
+
+[judge]  # stronger than the generator, pinned per run
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5

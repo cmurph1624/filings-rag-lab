@@ -125,3 +125,13 @@ def test_retrieval_only_config() -> None:
         from_dict({**raw, "judge": base()["judge"]})
     with pytest.raises(ValueError, match="go together"):
         from_dict({**raw, "generation": base()["generation"]})
+
+
+def test_default_corpus_keeps_p0_hashes_and_others_are_hashed() -> None:
+    implicit = from_dict(base())
+    assert implicit.corpus == "fb-gold@1"
+    assert from_dict({**base(), "corpus": "fb-gold@1"}).hash == implicit.hash
+    distractors = from_dict({**base(), "corpus": "fb-distractors@1"})
+    assert distractors.corpus == "fb-distractors@1" and distractors.hash != implicit.hash
+    with pytest.raises(ValueError, match="unknown corpus"):
+        from_dict({**base(), "corpus": "fb-gold"})  # versions are explicit
