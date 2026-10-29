@@ -41,3 +41,45 @@ def get_prompt(ref: str) -> Prompt:
     if ref not in PROMPTS:
         raise ValueError(f"unknown prompt {ref!r}; known: {sorted(PROMPTS)}")
     return PROMPTS[ref]
+
+
+@dataclass(frozen=True)
+class JudgePrompt:
+    system: str
+    template: str  # {question}, {gold}, {justification}, {answer}
+
+    def render(self, question: str, gold: str, justification: str | None, answer: str) -> str:
+        return self.template.format(
+            question=question, gold=gold, justification=justification or "(none)", answer=answer
+        )
+
+
+JUDGE_V1 = JudgePrompt(
+    system=(
+        "You grade a candidate answer to a question about a company's SEC filings against the "
+        "gold answer. Verdicts:\n"
+        "- correct: the candidate reaches the same conclusion as the gold answer. Numbers must "
+        "match after rounding to the gold answer's precision (allow about 1% for computed "
+        "ratios) and refer to the same period and units. Extra detail is fine if it does not "
+        "contradict the gold answer.\n"
+        "- incorrect: a different number, period, or conclusion; an answer that contradicts the "
+        "gold answer; or one that hedges between several answers.\n"
+        "- refused: the candidate declines, or says the information is not available, without "
+        "committing to an answer.\n"
+        "Judge only against the gold answer and its reasoning, not your own knowledge. Reply "
+        'with only a JSON object: {"verdict": "correct" | "incorrect" | "refused", '
+        '"rationale": "<one or two sentences>"}'
+    ),
+    template=(
+        "Question: {question}\n\nGold answer: {gold}\n\nGold reasoning: {justification}\n\n"
+        "Candidate answer:\n{answer}"
+    ),
+)
+
+JUDGE_PROMPTS: dict[str, JudgePrompt] = {"judge@1": JUDGE_V1}
+
+
+def get_judge_prompt(ref: str) -> JudgePrompt:
+    if ref not in JUDGE_PROMPTS:
+        raise ValueError(f"unknown judge prompt {ref!r}; known: {sorted(JUDGE_PROMPTS)}")
+    return JUDGE_PROMPTS[ref]

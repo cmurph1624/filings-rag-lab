@@ -4,13 +4,14 @@ from pathlib import Path
 import pytest
 
 from filings_rag.harness.config import from_dict, load
-from filings_rag.harness.prompts import PROMPTS, get_prompt
+from filings_rag.harness.prompts import JUDGE_PROMPTS, PROMPTS, get_prompt
 from filings_rag.retrieve.base import Hit
 from filings_rag.retrieve.factory import make_retriever
 
 ROOT = Path(__file__).resolve().parents[1]
 # Prompts are versioned: editing one in place changes results under the same name.
 PINNED = {"answer@1": "6def313c45d7a981"}
+PINNED_JUDGE = {"judge@1": "d22124b2220d1927"}
 
 
 def base() -> dict:  # type: ignore[type-arg]
@@ -19,7 +20,7 @@ def base() -> dict:  # type: ignore[type-arg]
         "pipeline": "naive-fixed@1",
         "retriever": {"kind": "vector", "k": 10},
         "generation": {"backend": "claude-cli", "model": "claude-sonnet-5-5", "prompt": "answer@1"},
-        "judge": {"backend": "claude-cli", "model": "claude-opus-5-5"},
+        "judge": {"backend": "claude-cli", "model": "claude-opus-5-5", "prompt": "judge@1"},
     }
 
 
@@ -71,6 +72,20 @@ def test_prompts_are_not_edited_in_place(ref: str) -> None:
     p = PROMPTS[ref]
     digest = hashlib.sha256(f"{p.system}\0{p.template}\0{p.excerpt}".encode()).hexdigest()[:16]
     assert PINNED.get(ref) == digest, f"{ref} changed: add a new version instead"
+
+
+@pytest.mark.parametrize("ref", sorted(JUDGE_PROMPTS))
+def test_judge_prompts_are_not_edited_in_place(ref: str) -> None:
+    p = JUDGE_PROMPTS[ref]
+    digest = hashlib.sha256(f"{p.system}\0{p.template}".encode()).hexdigest()[:16]
+    assert PINNED_JUDGE.get(ref) == digest, f"{ref} changed: add a new version instead"
+
+
+def test_judge_key_names_backend_model_effort_and_prompt() -> None:
+    assert from_dict(base()).judge_key == "claude-cli:claude-opus-5-5:judge@1"
+    b = base()
+    b["judge"]["effort"] = "high"
+    assert from_dict(b).judge_key == "claude-cli:claude-opus-5-5:high:judge@1"
 
 
 def test_prompt_renders_numbered_excerpts() -> None:

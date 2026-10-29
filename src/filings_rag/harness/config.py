@@ -21,7 +21,7 @@ class RunConfig:
     pipeline: str  # name@version
     retriever: dict[str, Any]
     generation: dict[str, Any]  # {backend, model, prompt, effort?}
-    judge: dict[str, Any]  # pinned per run; used by the eval step
+    judge: dict[str, Any]  # {backend, model, prompt, effort?}; pinned per run
     questions: str
     execution: dict[str, int]
     raw: dict[str, Any] = field(repr=False)
@@ -38,6 +38,17 @@ class RunConfig:
     def backend_spec(self) -> dict[str, Any]:
         return {k: v for k, v in self.generation.items() if k != "prompt"}
 
+    @property
+    def judge_spec(self) -> dict[str, Any]:
+        return {k: v for k, v in self.judge.items() if k != "prompt"}
+
+    @property
+    def judge_key(self) -> str:
+        """Identifies the judge's verdicts: backend, model, effort if set, and prompt."""
+        j = self.judge
+        effort = f":{j['effort']}" if j.get("effort") else ""
+        return f"{j['backend']}:{j['model']}{effort}:{j['prompt']}"
+
 
 def from_dict(raw: dict[str, Any]) -> RunConfig:
     missing = REQUIRED - raw.keys()
@@ -49,7 +60,7 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
     for key in ("backend", "model", "prompt"):
         if key not in raw["generation"]:
             raise ValueError(f"[generation] needs {key!r}")
-    for key in ("backend", "model"):
+    for key in ("backend", "model", "prompt"):
         if key not in raw["judge"]:
             raise ValueError(f"[judge] needs {key!r}")
     resolve_spec(raw["retriever"])  # fail on a bad [retriever] at load time, not mid-run

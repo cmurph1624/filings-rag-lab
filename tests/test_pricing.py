@@ -51,3 +51,21 @@ def test_shipped_price_table_covers_default_models() -> None:
     for m in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"):
         assert model_cost(m, Usage(1000, 1000), prices) > 0
     assert embedding_cost("voyage-finance-2", 1000, prices) > 0
+
+
+def test_plain_and_batch_views_drop_the_cache_pattern() -> None:
+    from filings_rag.pricing import batch_api_cost, plain_api_cost
+
+    # a claude -p call: whole prompt written to the 1-hour cache at 2x input
+    u = Usage(input_tokens=2, output_tokens=400, cache_write_1h_tokens=8_698)
+    assert model_cost("claude-sonnet-5-5", u) == pytest.approx((2 * 2 + 400 * 10 + 8_698 * 4) / 1e6)
+    assert plain_api_cost("claude-sonnet-5-5", u) == pytest.approx((8_700 * 2 + 400 * 10) / 1e6)
+    assert batch_api_cost("claude-sonnet-5-5", u) == pytest.approx(
+        plain_api_cost("claude-sonnet-5-5", u) / 2
+    )
+
+
+def test_sonnet_cache_read_rate_is_published_rate() -> None:
+    assert model_cost("claude-sonnet-5-5", Usage(cache_read_tokens=1_000_000)) == pytest.approx(
+        0.10
+    )
