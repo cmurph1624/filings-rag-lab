@@ -1,0 +1,9 @@
+# Retrieval-only twin of p0-naive: same index and retriever, no generation or judge.
+name = "p0-naive-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+
+[retriever]
+kind = "vector"
+k = 10
+search = "exact"

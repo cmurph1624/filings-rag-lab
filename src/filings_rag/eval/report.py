@@ -24,9 +24,10 @@ class RunSummary:
     git: str
     pipeline: str
     retriever: str
-    generation: str
+    generation: str  # "–" for a retrieval-only run
     judge: str
     total: int  # questions in the set
+    generated: bool = True
     answered: int = 0
     errors: int = 0
     verdicts: Counter[str] = field(default_factory=Counter)
@@ -78,6 +79,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
     cfg = from_dict(raw)
     r = resolve_spec(cfg.retriever)
     g = cfg.generation
+    generated = g is not None
     total_row = conn.execute(
         "SELECT count(*) FROM questions WHERE benchmark = %s", (cfg.questions,)
     ).fetchone()
@@ -88,8 +90,9 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         git=sha[:10] + (" (dirty)" if dirty else ""),
         pipeline=cfg.pipeline,
         retriever=" ".join([r["kind"]] + [f"{k}={v}" for k, v in r.items() if k != "kind"]),
-        generation=f"{g['backend']} {g['model']} {g['prompt']}",
-        judge=cfg.judge_key,
+        generation=f"{g['backend']} {g['model']} {g['prompt']}" if g else "– (retrieval only)",
+        judge=cfg.judge_key or "–",
+        generated=generated,
         total=int(total_row[0]) if total_row else 0,
     )
     for qtype, n in conn.execute(
@@ -117,7 +120,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         f"SELECT q.question_type, j.verdict, j.model, j.cost_usd, {_TOKENS}"
         " FROM judgments j JOIN questions q ON q.id = j.question_id"
         " WHERE j.run_id = %s AND j.judge = %s",
-        (run_id, cfg.judge_key),
+        (run_id, cfg.judge_key or ""),
     ):
         if verdict is not None:
             s.verdicts[verdict] += 1
@@ -154,7 +157,8 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render(runs: list[RunSummary]) -> str:
+def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
+    """Markdown for one or more runs. `retrieval_only` keeps just identity, retrieval, latency."""
     heads = [""] + [f"run {s.run_id}" for s in runs]
 
     def rows(*spec: tuple[str, Any]) -> list[list[str]]:
@@ -180,6 +184,30 @@ def render(runs: list[RunSummary]) -> str:
             ),
         ),
         "",
+    ]
+    if not retrieval_only:
+        out += _answers(runs, heads, rows)
+    out += _retrieval(runs, heads, rows)
+    if not retrieval_only:
+        out += _costs(heads, rows)
+    latency: list[tuple[str, Any]] = [
+        ("retrieval p50", lambda s: _sec(percentile(s.retrieve_s, 50))),
+        ("retrieval p95", lambda s: _sec(percentile(s.retrieve_s, 95))),
+    ]
+    if not retrieval_only:
+        latency += [
+            ("generation p50", lambda s: _sec(percentile(s.generate_s, 50))),
+            ("generation p95", lambda s: _sec(percentile(s.generate_s, 95))),
+        ]
+    out += ["## Latency", "", _table(heads, rows(*latency)), ""]
+    return "\n".join(out)
+
+
+Rows = Any  # the `rows` helper inside render
+
+
+def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
+    out = [
         "## Answers",
         "",
         "Accuracy counts every question in the set; unanswered or unjudged ones are not correct.",
@@ -187,7 +215,7 @@ def render(runs: list[RunSummary]) -> str:
         _table(
             heads,
             rows(
-                ("accuracy", lambda s: _pct(s.correct, s.total)),
+                ("accuracy", lambda s: _pct(s.correct, s.total) if s.generated else "–"),
                 ("incorrect", lambda s: str(s.verdicts["incorrect"])),
                 ("refused", lambda s: str(s.verdicts["refused"])),
                 ("not judged", lambda s: str(s.total - sum(s.verdicts.values()))),
@@ -198,25 +226,26 @@ def render(runs: list[RunSummary]) -> str:
         "",
     ]
     types = sorted({t for s in runs for t in s.by_type})
+
+    def by_type(s: RunSummary, t: str) -> str:
+        c = s.by_type.get(t, Counter())
+        return _pct(c["correct"], c["n"]) if s.generated else "–"
+
     out.append(
-        _table(
-            ["question type"] + heads[1:],
-            [
-                [t]
-                + [
-                    _pct(s.by_type.get(t, Counter())["correct"], s.by_type.get(t, Counter())["n"])
-                    for s in runs
-                ]
-                for t in types
-            ],
-        )
+        _table(["question type"] + heads[1:], [[t] + [by_type(s, t) for s in runs] for t in types])
     )
-    out += [
-        "",
+    out.append("")
+    return out
+
+
+def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
+    return [
         "## Retrieval",
         "",
         "Against FinanceBench evidence passages mapped to the pipeline's chunks. recall@k: share "
-        "of a question's evidence passages found in the top k. hit@k: any passage found.",
+        "of a question's evidence passages found in the top k. hit@k: any passage found. These "
+        "are conservative: an answer can also come from a passage that repeats the same figure "
+        "(see docs/results/p0-label-audit.md).",
         "",
         _table(
             heads,
@@ -234,17 +263,10 @@ def render(runs: list[RunSummary]) -> str:
             ),
         ),
         "",
-        "## Cost",
-        "",
-        f"USD at list prices (`config/prices.toml`, as of {load_prices()['as_of']}), whoever "
-        "paid. *As recorded* prices the tokens the backend actually used: `claude -p` writes "
-        "each new prompt to the 1-hour cache at 2× input and reads repeats from it, so this "
-        "figure depends on what earlier runs left in the cache. *Plain API* is the same tokens "
-        "as an uncached API call and *Batch API* is that at the batch discount; these two are "
-        "comparable across runs and backends. Answering cost is "
-        "generation plus query embedding; the judge is eval overhead and is shown on its own.",
-        "",
     ]
+
+
+def _costs(heads: list[str], rows: Rows) -> list[str]:
     cost_rows: list[tuple[str, Any]] = []
     for v in COST_VIEWS:
         cost_rows += [
@@ -259,20 +281,17 @@ def render(runs: list[RunSummary]) -> str:
             ),
             (f"{v}: judge, total", lambda s, v=v: _usd(s.judge_cost[v])),
         ]
-    out += [
+    return [
+        "## Cost",
+        "",
+        f"USD at list prices (`config/prices.toml`, as of {load_prices()['as_of']}), whoever "
+        "paid. *As recorded* prices the tokens the backend actually used: `claude -p` writes "
+        "each new prompt to the 1-hour cache at 2× input and reads repeats from it, so this "
+        "figure depends on what earlier runs left in the cache. *Plain API* is the same tokens "
+        "as an uncached API call and *Batch API* is that at the batch discount; these two are "
+        "comparable across runs and backends. Answering cost is "
+        "generation plus query embedding; the judge is eval overhead and is shown on its own.",
+        "",
         _table(heads, rows(*cost_rows)),
         "",
-        "## Latency",
-        "",
-        _table(
-            heads,
-            rows(
-                ("retrieval p50", lambda s: _sec(percentile(s.retrieve_s, 50))),
-                ("retrieval p95", lambda s: _sec(percentile(s.retrieve_s, 95))),
-                ("generation p50", lambda s: _sec(percentile(s.generate_s, 50))),
-                ("generation p95", lambda s: _sec(percentile(s.generate_s, 95))),
-            ),
-        ),
-        "",
     ]
-    return "\n".join(out)

@@ -275,3 +275,25 @@ def test_judge_then_report(conn: psycopg.Connection) -> None:  # type: ignore[ty
     md = render([summary, summary])
     assert "open subset" in md and "| accuracy | 50.0% (2/4) | 50.0% (2/4) |" in md
     assert "Batch API: per correct answer" in md
+
+
+def test_retrieval_only_run(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.eval.judge import judge_run
+    from filings_rag.eval.report import render, summarize
+    from filings_rag.harness.prompts import get_judge_prompt
+
+    c = from_dict({k: v for k, v in cfg().raw.items() if k not in ("generation", "judge")})
+    rid = create_run(conn, c, GIT)
+    s = execute(conn, rid, c, FakeRetriever(), None, None, GIT, log=lambda s: None)
+    assert (s.answered, s.failed, s.finished) == (4, 0, True)
+    rows = conn.execute(
+        "SELECT answer, embed_tokens, error FROM run_questions WHERE run_id = %s", (rid,)
+    ).fetchall()
+    assert rows == [(None, 4, None)] * 4
+    j = FakeJudge({})
+    judged = judge_run(conn, rid, "x", j, get_judge_prompt("judge@1"), log=lambda s: None)
+    assert judged.judged == 0 and j.calls == 0  # nothing to judge
+    md = render([summarize(conn, rid)], retrieval_only=True)
+    assert "## Retrieval" in md and "## Answers" not in md and "## Cost" not in md
+    full = render([summarize(conn, rid)])
+    assert "| accuracy | – |" in full and "retrieval only" in full

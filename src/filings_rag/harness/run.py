@@ -155,8 +155,8 @@ def execute(
     run_id: int,
     cfg: RunConfig,
     retriever: Retriever,
-    backend: ModelBackend,
-    prompt: Prompt,
+    backend: ModelBackend | None,
+    prompt: Prompt | None,
     git: GitInfo,
     *,
     limit: int | None = None,
@@ -222,8 +222,11 @@ def execute(
         if error is None:
             stats.answered += 1
             streak = 0
-            assert result is not None
-            log(f"  ok   {qid:24} {result.latency_s:6.1f}s  ${gen_cost:.4f}  {result.stop_reason}")
+            if result is None:  # retrieval-only run
+                log(f"  ok   {qid:24} retrieved {len(job.retrieval.hits) if job else 0}")
+            else:
+                took = f"{result.latency_s:6.1f}s"
+                log(f"  ok   {qid:24} {took}  ${gen_cost:.4f}  {result.stop_reason}")
         else:
             stats.failed += 1
             streak += 1
@@ -256,6 +259,9 @@ def execute(
                 record(spent, qid, None, f"retrieval: {type(e).__name__}: {e}")
                 continue
             job = _Job(qid, retrieval, time.monotonic() - start)
+            if backend is None or prompt is None:
+                record(job, qid, None, None)
+                continue
             fut = pool.submit(
                 backend.generate, prompt.system, prompt.render(question, retrieval.hits)
             )
