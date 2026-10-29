@@ -81,3 +81,15 @@ def test_prompt_renders_numbered_excerpts() -> None:
     assert out.endswith("Question: What was 3M's FY2018 revenue?")
     with pytest.raises(ValueError):
         get_prompt("answer@99")
+
+
+def test_hash_covers_retriever_defaults_not_spelling() -> None:
+    implicit = from_dict(base())
+    explicit = base()
+    explicit["retriever"] = {"kind": "vector", "k": 10, "search": "exact", "ef_search": 400}
+    assert from_dict(explicit).hash == implicit.hash  # ef_search is unused by exact search
+    hnsw = base()
+    hnsw["retriever"] = {"kind": "vector", "k": 10, "search": "hnsw"}
+    assert from_dict(hnsw).hash != implicit.hash
+    with pytest.raises(ValueError, match="options"):
+        from_dict({**base(), "retriever": {"kind": "vector", "topk": 3}})  # caught at load

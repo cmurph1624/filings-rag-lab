@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from filings_rag.retrieve.factory import resolve_spec
+
 REQUIRED = {"name", "pipeline", "retriever", "generation", "judge"}
 OPTIONAL = {"questions", "execution"}
 NOT_HASHED = {"name", "execution"}  # labels and how-to-run settings don't change results
@@ -27,7 +29,8 @@ class RunConfig:
     @property
     def hash(self) -> str:
         shaped = {k: v for k, v in self.raw.items() if k not in NOT_HASHED}
-        shaped.setdefault("questions", self.questions)
+        shaped["questions"] = self.questions
+        shaped["retriever"] = resolve_spec(self.retriever)  # code defaults count too
         blob = json.dumps(shaped, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
@@ -49,6 +52,7 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
     for key in ("backend", "model"):
         if key not in raw["judge"]:
             raise ValueError(f"[judge] needs {key!r}")
+    resolve_spec(raw["retriever"])  # fail on a bad [retriever] at load time, not mid-run
     execution = dict(raw.get("execution", {}))
     bad = execution.keys() - EXECUTION_DEFAULTS.keys()
     if bad:

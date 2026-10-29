@@ -23,7 +23,7 @@ from filings_rag.harness.config import RunConfig
 from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, embedding_cost, model_cost
-from filings_rag.retrieve.base import Retrieval, Retriever
+from filings_rag.retrieve.base import Retrieval, RetrievalError, Retriever
 
 Log = Callable[[str], None]
 
@@ -179,7 +179,12 @@ def execute(
             except KeyError as e:  # keep the answer and its tokens; a resume retries it
                 error = str(e)
         emb_tokens = job.retrieval.embed_tokens if job else 0
-        emb_cost = embedding_cost(job.retrieval.embedder, emb_tokens) if job else 0.0
+        emb_cost = 0.0
+        if job is not None and emb_tokens:
+            try:
+                emb_cost = embedding_cost(job.retrieval.embedder, emb_tokens)
+            except KeyError as e:
+                error = error or str(e)
         retrieved = [
             {"chunk_id": h.chunk_id, "doc_name": h.doc_name, "page": h.page, "score": h.score}
             for h in (job.retrieval.hits if job else [])
@@ -225,10 +230,13 @@ def execute(
             log(f"  FAIL {qid:24} {error[:200]}")
 
     def settle(fut: "Future[Result]", job: _Job) -> None:
+        result: Result | None = None
+        error: str | None = None
         try:
-            record(job, job.question_id, fut.result(), None)
+            result = fut.result()
         except Exception as e:  # one bad answer shouldn't stop the run; it's retried on resume
-            record(job, job.question_id, None, f"{type(e).__name__}: {e}")
+            error = f"{type(e).__name__}: {e}"
+        record(job, job.question_id, result, error)  # exactly once, whatever happens after
 
     in_flight: dict[Future[Result], _Job] = {}
     with ThreadPoolExecutor(concurrency) as pool:
@@ -242,7 +250,10 @@ def execute(
                 retrieval = retriever.retrieve(question)
             except Exception as e:
                 conn.rollback()
-                record(None, qid, None, f"retrieval: {type(e).__name__}: {e}")
+                spent = None
+                if isinstance(e, RetrievalError):  # the query was embedded before the failure
+                    spent = _Job(qid, Retrieval([], e.embed_tokens, e.embedder), 0.0)
+                record(spent, qid, None, f"retrieval: {type(e).__name__}: {e}")
                 continue
             job = _Job(qid, retrieval, time.monotonic() - start)
             fut = pool.submit(

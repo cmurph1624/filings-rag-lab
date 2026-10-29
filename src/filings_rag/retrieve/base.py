@@ -20,5 +20,14 @@ class Retrieval:
     embedder: str  # price-table key for those tokens
 
 
+class RetrievalError(RuntimeError):
+    """Retrieval failed after spending query-embedding tokens, which must still be recorded."""
+
+    def __init__(self, message: str, embed_tokens: int, embedder: str) -> None:
+        super().__init__(message)
+        self.embed_tokens = embed_tokens
+        self.embedder = embedder
+
+
 class Retriever(Protocol):
     def retrieve(self, query: str) -> Retrieval: ...

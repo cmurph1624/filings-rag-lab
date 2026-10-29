@@ -15,7 +15,7 @@ from filings_rag.harness.run import GitInfo, check_resume, create_run, execute
 from filings_rag.ingest.build import build
 from filings_rag.ingest.naive_fixed import NaiveFixed
 from filings_rag.pricing import Usage
-from filings_rag.retrieve.base import Retrieval
+from filings_rag.retrieve.base import Retrieval, RetrievalError
 from filings_rag.retrieve.vector import VectorRetriever
 
 pytestmark = [
@@ -184,8 +184,49 @@ def test_run_stops_after_consecutive_failures(conn: psycopg.Connection) -> None:
 
 def test_resume_refuses_a_different_config(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
     rid = create_run(conn, cfg(), GIT)
-    other = cfg()
-    other.raw["retriever"] = {"kind": "vector", "k": 5}
+    other = from_dict({**cfg().raw, "retriever": {"kind": "vector", "k": 5}})
     with pytest.raises(ValueError, match="different config"):
         check_resume(conn, rid, other)
     check_resume(conn, rid, cfg(concurrency=4))  # execution settings don't matter
+
+
+def test_answer_is_recorded_once_even_if_logging_fails(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    c = cfg(concurrency=1)
+    rid = create_run(conn, c, GIT)
+
+    def log(line: str) -> None:
+        raise BrokenPipeError("stdout closed")
+
+    with pytest.raises(BrokenPipeError):
+        execute(conn, rid, c, FakeRetriever(), FakeBackend(), get_prompt("answer@1"), GIT,
+                limit=1, log=log)  # fmt: skip
+    conn.rollback()
+    row = conn.execute(
+        "SELECT attempts, error, answer, embed_tokens FROM run_questions WHERE run_id = %s", (rid,)
+    ).fetchone()
+    assert row == (1, None, "42", 4)
+
+
+def test_retrieval_failure_keeps_query_embedding_spend(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    class Broken:
+        def retrieve(self, query: str) -> Retrieval:
+            raise RetrievalError("relation does not exist", 7, "voyage-finance-2")
+
+    c = cfg()
+    rid = create_run(conn, c, GIT)
+    s = execute(conn, rid, c, Broken(), FakeBackend(), get_prompt("answer@1"), GIT, limit=1,
+                log=lambda s: None)  # fmt: skip
+    assert s.failed == 1 and s.embed_tokens == 7
+    row = conn.execute(
+        "SELECT embed_tokens, embed_cost_usd > 0, error LIKE 'retrieval:%%' FROM run_questions"
+        " WHERE run_id = %s", (rid,),
+    ).fetchone()  # fmt: skip
+    assert row == (7, True, True)
+
+
+def test_vector_retriever_wraps_db_errors_with_spend(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    r = VectorRetriever(conn, "chunks__does_not_exist__v1", WordEmbedder())
+    with pytest.raises(RetrievalError) as info:
+        r.retrieve("w1")
+    assert info.value.embed_tokens == 3
+    conn.rollback()

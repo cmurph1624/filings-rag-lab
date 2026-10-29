@@ -11,7 +11,7 @@ import psycopg
 from psycopg import sql
 
 from filings_rag.embed.base import Embedder, to_pgvector
-from filings_rag.retrieve.base import Hit, Retrieval
+from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
 
 _QUERY = """
 SELECT c.id, d.doc_name, c.page, c.text, 1 - c.dist AS score
@@ -64,4 +64,8 @@ class VectorRetriever:
 
     def retrieve(self, query: str) -> Retrieval:
         out = self._embedder.embed([query], "query")
-        return Retrieval(self.query(out.vectors[0]), out.tokens, self._embedder.name)
+        try:
+            hits = self.query(out.vectors[0])
+        except psycopg.Error as e:
+            raise RetrievalError(str(e), out.tokens, self._embedder.name) from e
+        return Retrieval(hits, out.tokens, self._embedder.name)
