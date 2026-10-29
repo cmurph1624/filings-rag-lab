@@ -439,3 +439,22 @@ def test_unparseable_llm_scope_is_costed_cached_and_searches_the_corpus(
     assert aux["scope"]["cost_usd"] > 0 and aux["scope"]["cached"] is False
     _scoped_run(conn, scoper, RecordingRetriever())
     assert backend.calls == 2  # 2 questions, each paid once: the second run is all cache
+
+
+class ScalarScopeBackend(FakeScopeBackend):
+    def generate(self, system: str, prompt: str) -> Result:
+        self.calls += 1
+        text = '{"company": null, "years": 2023, "quarters": 3}'
+        return Result(text, Usage(input_tokens=300, output_tokens=5), 1.0, self.model, "end_turn")
+
+
+def test_scalar_llm_scope_fields_still_cost_and_cache(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    labels = [DocLabel(1, DOC, "ZZ", 2022, "FY")]
+    spec = {"mode": "llm", "lookahead": 0, "backend": "fake", "model": "m", "prompt": "scope@1"}
+    backend = ScalarScopeBackend()
+    scoper = Scoper(conn, spec, labels, [Company("ZZ", "ZZQ", ())], backend)
+    stats, rows = _scoped_run(conn, scoper, RecordingRetriever())
+    scope, aux = rows[0]
+    assert stats.failed == 0 and scope["level"] == "corpus" and aux["scope"]["cost_usd"] > 0
+    _scoped_run(conn, scoper, RecordingRetriever())
+    assert backend.calls == 2

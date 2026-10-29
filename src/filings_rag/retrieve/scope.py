@@ -118,13 +118,14 @@ class Mentions:
     def from_json(cls, d: dict[str, Any]) -> "Mentions":
         """Lenient: years that aren't integers and quarters that aren't [year, 1-4] are dropped."""
         years: set[int] = set()
-        for y in d.get("years") or []:
+        raw_years, raw_quarters = d.get("years"), d.get("quarters")
+        for y in raw_years if isinstance(raw_years, list) else []:
             try:
                 years.add(int(y))
             except (TypeError, ValueError):
                 continue
         quarters: set[tuple[int, int]] = set()
-        for pair in d.get("quarters") or []:
+        for pair in raw_quarters if isinstance(raw_quarters, list) else []:
             try:
                 y, q = (int(x) for x in pair)
             except (TypeError, ValueError):
@@ -254,6 +255,8 @@ def parse_llm_mentions(text: str, companies: list[str]) -> Mentions:
     if m is None:
         raise ValueError(f"scope reply has no JSON object: {text[:200]!r}")
     data = json.loads(m[0])
+    if not isinstance(data, dict):
+        raise ValueError(f"scope reply is not a JSON object: {m[0][:200]!r}")
     company = data.get("company")
     by_lower = {c.lower(): c for c in companies}
     name = by_lower.get(str(company).lower()) if company else None
@@ -343,7 +346,7 @@ class Scoper:
         try:
             m = parse_llm_mentions(result.text, names)
             stored = m.to_json()
-        except ValueError as e:  # json.JSONDecodeError is a ValueError
+        except (ValueError, TypeError, AttributeError) as e:  # any reply shape we can't read
             m = Mentions(None)
             aux["parse_error"] = f"{e}"[:300]
             stored = {**m.to_json(), "parse_error": aux["parse_error"]}

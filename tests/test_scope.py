@@ -140,3 +140,9 @@ def test_a_figure_that_looks_like_a_year_only_widens_the_years() -> None:
 def test_malformed_llm_fields_are_dropped_not_fatal() -> None:
     reply = '{"company": 7, "years": [2022, "soon"], "quarters": [[2023], [2023, 5], [2023, 2]]}'
     assert S.parse_llm_mentions(reply, ["Boeing"]) == S.Mentions(None, [2022], [(2023, 2)])
+
+
+def test_scalar_years_and_quarters_are_ignored() -> None:
+    reply = '{"company": "Boeing", "years": 2023, "quarters": 3}'
+    assert S.parse_llm_mentions(reply, ["Boeing"]) == S.Mentions("Boeing", [], [])
+    assert S.parse_llm_mentions('{"company": "Boeing", "years": "2023"}', ["Boeing"]).years == []
