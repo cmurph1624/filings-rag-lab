@@ -9,4 +9,4 @@ model, judge) with tokens and API-equivalent cost, and a CI eval gate blocks reg
 
 Batch work (ingest, embedding, evals) runs locally; the public deployment is on AWS (Terraform-provisioned EC2).
 
-Status: P0, baseline and harness skeleton. Nothing here yet.
+Status: P0, baseline and harness skeleton. Scaffold in place; see `CLAUDE.md` for setup.
