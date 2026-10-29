@@ -62,9 +62,9 @@ def test_config_rejects_typos() -> None:
 
 def test_retriever_factory_rejects_unknown_kind_and_options() -> None:
     with pytest.raises(ValueError, match="kind"):
-        make_retriever(None, {"kind": "bm25"}, "t", None)  # type: ignore[arg-type]
+        make_retriever(None, {"kind": "bm25"}, "t", None, [])  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="options"):
-        make_retriever(None, {"kind": "vector", "top_k": 5}, "t", None)  # type: ignore[arg-type]
+        make_retriever(None, {"kind": "vector", "top_k": 5}, "t", None, [])  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("ref", sorted(PROMPTS))

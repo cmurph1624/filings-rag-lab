@@ -22,6 +22,7 @@ JOIN documents d ON d.id = c.document_id
 ORDER BY c.dist, c.id
 """
 SEARCH = ("exact", "hnsw")
+MAX_SCAN_TUPLES = 20_000  # pgvector's default, pinned so a server change can't move results
 
 
 class VectorRetriever:
@@ -56,6 +57,7 @@ class VectorRetriever:
             sql.SQL("SET LOCAL enable_seqscan = off"),
             sql.SQL("SET LOCAL hnsw.ef_search = {}").format(sql.Literal(self.ef_search)),
             sql.SQL("SET LOCAL hnsw.iterative_scan = strict_order"),
+            sql.SQL("SET LOCAL hnsw.max_scan_tuples = {}").format(sql.Literal(MAX_SCAN_TUPLES)),
         ]
 
     def query(self, vector: list[float]) -> list[Hit]:
@@ -74,4 +76,11 @@ class VectorRetriever:
             hits = self.query(out.vectors[0])
         except psycopg.Error as e:
             raise RetrievalError(str(e), out.tokens, self._embedder.name) from e
+        if len(hits) < self.k and self.search == "hnsw" and self.documents is not None:
+            # The filtered iterative scan gave up (max_scan_tuples) before k rows passed.
+            raise RetrievalError(
+                f"hnsw returned {len(hits)} of {self.k} hits within the corpus filter",
+                out.tokens,
+                self._embedder.name,
+            )
         return Retrieval(hits, out.tokens, self._embedder.name)

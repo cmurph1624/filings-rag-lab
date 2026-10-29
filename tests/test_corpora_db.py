@@ -9,6 +9,7 @@ from filings_rag.embed.base import Embeddings, InputType
 from filings_rag.extract.html import EXTRACTOR
 from filings_rag.ingest.build import build
 from filings_rag.ingest.naive_fixed import NaiveFixed
+from filings_rag.retrieve.base import RetrievalError
 from filings_rag.retrieve.vector import VectorRetriever
 
 pytestmark = [
@@ -108,5 +109,16 @@ def test_vector_retriever_searches_only_the_corpus(conn: psycopg.Connection, sea
     unfiltered = VectorRetriever(conn, TABLE, WordEmbedder(), k=3, search=search)
     every = [h.doc_name for h in unfiltered.retrieve("w5 query").hits]
     assert set(every[:2]) == {GOLD, "ZZCORP_2021_10K"}  # the twin ties with the gold filing
-    scoped = VectorRetriever(conn, TABLE, WordEmbedder(), k=3, search=search, documents=ids)
+    scoped = VectorRetriever(conn, TABLE, WordEmbedder(), k=2, search=search, documents=ids)
     assert [h.doc_name for h in scoped.retrieve("w5 query").hits] == [GOLD, "ZZCORP_2020_10K"]
+
+
+def test_hnsw_short_of_k_within_the_filter_is_an_error(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    _build(conn)
+    corpora.define(conn, "zz-small@1", {"zzc-gold"})  # one chunk: k=3 can't be met
+    ids = corpora.document_ids(conn, "zz-small@1", TABLE)
+    r = VectorRetriever(conn, TABLE, WordEmbedder(), k=3, search="hnsw", documents=ids)
+    with pytest.raises(RetrievalError, match="1 of 3"):
+        r.retrieve("w5 query")
+    exact = VectorRetriever(conn, TABLE, WordEmbedder(), k=3, documents=ids)
+    assert len(exact.retrieve("w5 query").hits) == 1  # exact search returns what exists

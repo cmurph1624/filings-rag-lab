@@ -30,10 +30,12 @@ def make_retriever(
     spec: dict[str, Any],
     table: str,
     embedder: Embedder,
-    documents: list[int] | None = None,
+    documents: list[int],
 ) -> Retriever:
     """Build a retriever from a run config's [retriever] table: {kind, ...options}.
 
-    `documents` limits it to a corpus's filings (`corpora.document_ids`)."""
+    `documents` is the corpus's filings (`corpora.document_ids`). It is required: chunk tables
+    hold every fetched filing, so an unfiltered retriever would search more than the config says.
+    """
     opts = {k: v for k, v in resolve_spec(spec).items() if k != "kind"}
     return VectorRetriever(conn, table, embedder, documents=documents, **opts)
