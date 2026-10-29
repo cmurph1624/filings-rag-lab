@@ -58,6 +58,9 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
         resolved["rerank"] = RERANK_DEFAULTS | rr
         if resolved["rerank"]["candidates"] < resolved["k"]:
             raise ValueError("rerank candidates must be at least k")
+        if kind == "hybrid" and resolved["candidates"] < resolved["rerank"]["candidates"]:
+            # the hybrid returns at most its own candidates, which the reranker then reads
+            raise ValueError("hybrid candidates must be at least the rerank candidates")
     return {"kind": kind, **resolved}
 
 

@@ -125,6 +125,9 @@ def test_rerank_spec_resolution() -> None:
     assert resolve_spec({**base, "rerank": {}})["rerank"] == {"model": "rerank-3", "candidates": 50}
     with pytest.raises(ValueError, match="at least k"):
         resolve_spec({**base, "rerank": {"candidates": 5}})
+    with pytest.raises(ValueError, match="at least the rerank candidates"):
+        resolve_spec({"kind": "hybrid", "rerank": {"candidates": 100}})  # hybrid pool is 50
+    assert resolve_spec({"kind": "hybrid", "candidates": 100, "rerank": {"candidates": 100}})
     with pytest.raises(ValueError, match="rerank options"):
         resolve_spec({**base, "rerank": {"top_n": 5}})
     with pytest.raises(ValueError, match="exactly when"):
