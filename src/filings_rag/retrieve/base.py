@@ -30,4 +30,6 @@ class RetrievalError(RuntimeError):
 
 
 class Retriever(Protocol):
-    def retrieve(self, query: str) -> Retrieval: ...
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
+        """Top hits for `query`; `documents` narrows the corpus further (query scoping)."""
+        ...

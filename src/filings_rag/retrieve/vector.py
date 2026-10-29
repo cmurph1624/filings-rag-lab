@@ -48,7 +48,6 @@ class VectorRetriever:
         self.search = search
         self.ef_search = max(ef_search, k)  # HNSW returns at most ef_search rows
         self.documents = documents  # None: every document in the table
-        self._where = sql.SQL("WHERE document_id = ANY(%(docs)s)" if documents is not None else "")
 
     def _settings(self) -> list[sql.SQL | sql.Composed]:
         if self.search == "exact":
@@ -60,23 +59,27 @@ class VectorRetriever:
             sql.SQL("SET LOCAL hnsw.max_scan_tuples = {}").format(sql.Literal(MAX_SCAN_TUPLES)),
         ]
 
-    def query(self, vector: list[float]) -> list[Hit]:
+    def query(self, vector: list[float], documents: list[int] | None = None) -> list[Hit]:
+        docs = self.documents if documents is None else documents
+        where = sql.SQL("WHERE document_id = ANY(%(docs)s)" if docs is not None else "")
         with self._conn.transaction():
             for stmt in self._settings():
                 self._conn.execute(stmt)
             rows = self._conn.execute(
-                sql.SQL(_QUERY).format(t=self._table, where=self._where),
-                {"q": to_pgvector(vector), "k": self.k, "docs": self.documents},
+                sql.SQL(_QUERY).format(t=self._table, where=where),
+                {"q": to_pgvector(vector), "k": self.k, "docs": docs},
             ).fetchall()
         return [Hit(cid, doc, page, float(score), text) for cid, doc, page, text, score in rows]
 
-    def retrieve(self, query: str) -> Retrieval:
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
+        """`documents` replaces the corpus filter for this query (a scope within the corpus)."""
         out = self._embedder.embed([query], "query")
+        filtered = documents is not None or self.documents is not None
         try:
-            hits = self.query(out.vectors[0])
+            hits = self.query(out.vectors[0], documents)
         except psycopg.Error as e:
             raise RetrievalError(str(e), out.tokens, self._embedder.name) from e
-        if len(hits) < self.k and self.search == "hnsw" and self.documents is not None:
+        if len(hits) < self.k and self.search == "hnsw" and filtered:
             # The filtered iterative scan gave up (max_scan_tuples) before k rows passed.
             raise RetrievalError(
                 f"hnsw returned {len(hits)} of {self.k} hits within the corpus filter",

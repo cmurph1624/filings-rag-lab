@@ -23,6 +23,7 @@ from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
 from filings_rag.retrieve.factory import make_retriever
+from filings_rag.retrieve.scope import make_scoper
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -209,13 +210,11 @@ def run_cmd(
         typer.echo("warning: uncommitted changes; the recorded git SHA won't reproduce this run")
     with psycopg.connect(settings.database_url) as conn:
         table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
+        corpus_ids = corpora.document_ids(conn, cfg.corpus, table)
         retriever = make_retriever(
-            conn,
-            cfg.retriever,
-            table,
-            make_embedder(embedder_name, dims, settings),
-            corpora.document_ids(conn, cfg.corpus, table),
+            conn, cfg.retriever, table, make_embedder(embedder_name, dims, settings), corpus_ids
         )
+        scoper = make_scoper(conn, cfg.retriever.get("scope"), corpus_ids, CORPUS / "companies.csv")
         spec = cfg.backend_spec
         backend = make_backend(spec) if spec else None  # None: retrieval-only run
         prompt = get_prompt(cfg.generation["prompt"]) if cfg.generation else None
@@ -226,7 +225,16 @@ def run_cmd(
             run_id = harness.create_run(conn, cfg, git)
         typer.echo(f"run {run_id}: {cfg.name} on {cfg.corpus} (config {cfg.hash})")
         s = harness.execute(
-            conn, run_id, cfg, retriever, backend, prompt, git, limit=limit, log=typer.echo
+            conn,
+            run_id,
+            cfg,
+            retriever,
+            backend,
+            prompt,
+            git,
+            scoper=scoper,
+            limit=limit,
+            log=typer.echo,
         )
     u = s.usage
     typer.echo(
@@ -236,8 +244,9 @@ def run_cmd(
         f"  tokens: {u.input_tokens:,} in, {u.output_tokens:,} out, {u.cache_read_tokens:,} cache"
         f" read, {u.cache_write_tokens + u.cache_write_1h_tokens:,} cache write;"
         f" {s.embed_tokens:,} query-embedding\n"
-        f"  API-equivalent cost: ${s.gen_cost + s.embed_cost:.4f}"
-        f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f});"
+        f"  API-equivalent cost: ${s.gen_cost + s.embed_cost + s.aux_cost:.4f}"
+        f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f},"
+        f" scope model ${s.aux_cost:.4f});"
         f" backend reported ${s.reported_cost:.4f}"
     )
     if s.paused:  # a clean stop, not a failure: exit 3 like `usage gate`

@@ -17,6 +17,7 @@ from filings_rag.ingest.build import build
 from filings_rag.ingest.naive_fixed import NaiveFixed
 from filings_rag.pricing import Usage
 from filings_rag.retrieve.base import Retrieval, RetrievalError
+from filings_rag.retrieve.scope import Company, DocLabel, Scoper
 from filings_rag.retrieve.vector import VectorRetriever
 
 pytestmark = [
@@ -49,7 +50,7 @@ class ZzRunPipe(NaiveFixed):
 
 
 class FakeRetriever:
-    def retrieve(self, query: str) -> Retrieval:
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
         return Retrieval([], embed_tokens=4, embedder="voyage-finance-2")
 
 
@@ -111,6 +112,7 @@ def conn():  # type: ignore[no-untyped-def]
         yield c
         c.rollback()
         c.execute("DELETE FROM runs WHERE name = 'zz-run'")
+        c.execute("DELETE FROM query_scopes WHERE question_id LIKE 'zz_run_%%'")
         c.execute("DELETE FROM questions WHERE benchmark = %s", (QSET,))
         c.execute("DROP TABLE IF EXISTS chunks__zz_run__v1")
         c.execute("DELETE FROM pipelines WHERE name = 'zz-run'")
@@ -258,7 +260,7 @@ def test_answer_is_recorded_once_even_if_logging_fails(conn: psycopg.Connection)
 
 def test_retrieval_failure_keeps_query_embedding_spend(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
     class Broken:
-        def retrieve(self, query: str) -> Retrieval:
+        def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
             raise RetrievalError("relation does not exist", 7, "voyage-finance-2")
 
     c = cfg()
@@ -347,3 +349,70 @@ def test_retrieval_only_run(conn: psycopg.Connection) -> None:  # type: ignore[t
     full = render([summarize(conn, rid)])
     assert "| accuracy | – |" in full and "retrieval only" in full
     assert "| not judged | – |" in full and "| plain API: per question | – |" in full
+
+
+class RecordingRetriever(FakeRetriever):
+    def __init__(self) -> None:
+        self.documents: list[list[int] | None] = []
+
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
+        self.documents.append(documents)
+        return super().retrieve(query, documents)
+
+
+class FakeScopeBackend:
+    name = "fake"
+    model = "claude-haiku-5-5"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, system: str, prompt: str) -> Result:
+        self.calls += 1
+        text = '{"company": "ZZ", "years": [2022], "quarters": []}'
+        return Result(text, Usage(input_tokens=300, output_tokens=20), 1.0, self.model, "end_turn")
+
+
+def _scoped_run(conn, scoper, retriever):  # type: ignore[no-untyped-def]
+    raw = {k: v for k, v in cfg().raw.items() if k not in ("generation", "judge")}
+    c = from_dict(raw)
+    rid = create_run(conn, c, GIT)
+    stats = execute(
+        conn, rid, c, retriever, None, None, GIT, scoper=scoper, limit=2, log=lambda s: None
+    )
+    rows = conn.execute(
+        "SELECT scope, aux FROM run_questions WHERE run_id = %s ORDER BY question_id", (rid,)
+    ).fetchall()
+    return stats, rows
+
+
+def test_llm_scope_is_cached_recorded_and_costed(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    doc_id = conn.execute("SELECT id FROM documents WHERE accession = 'zzrun-1'").fetchone()[0]
+    labels = [
+        DocLabel(doc_id, DOC, "ZZ", 2022, "FY"),
+        DocLabel(-1, "ZZRUN_2019_10K", "ZZ", 2019, "FY"),
+    ]
+    spec = {"mode": "llm", "lookahead": 0, "backend": "fake", "model": "m", "prompt": "scope@1"}
+    backend = FakeScopeBackend()
+    scoper = Scoper(conn, spec, labels, [Company("ZZ", "ZZQ", ())], backend)
+    retriever = RecordingRetriever()
+    stats, rows = _scoped_run(conn, scoper, retriever)
+    assert backend.calls == 2 and retriever.documents == [[doc_id], [doc_id]]
+    scope, aux = rows[0]
+    assert scope == {
+        "mode": "llm", "company": "ZZ", "years": [2022], "quarters": [],
+        "level": "filings", "docs": [DOC],
+    }  # fmt: skip
+    assert aux["scope"]["cached"] is False and aux["scope"]["usage"]["input_tokens"] == 300
+    assert stats.aux_cost == pytest.approx(2 * aux["scope"]["cost_usd"]) and stats.aux_cost > 0
+    stats, rows = _scoped_run(conn, scoper, RecordingRetriever())  # a second run: from cache
+    assert backend.calls == 2
+    assert rows[0][1]["scope"]["cached"] is True and stats.aux_cost > 0  # still costed
+
+
+def test_rules_scope_without_a_company_searches_the_corpus(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    labels = [DocLabel(1, DOC, "ZZ", 2022, "FY")]
+    scoper = Scoper(conn, {"mode": "rules", "lookahead": 0}, labels, [Company("ZZ", "", ())])
+    _, rows = _scoped_run(conn, scoper, RecordingRetriever())
+    scope, aux = rows[0]
+    assert scope["level"] == "corpus" and scope["docs"] == [] and aux == {}
