@@ -9,4 +9,24 @@ model, judge) with tokens and API-equivalent cost, and a CI eval gate blocks reg
 
 Batch work (ingest, embedding, evals) runs locally; the public deployment is on AWS (Terraform-provisioned EC2).
 
-Status: P0, baseline and harness skeleton. Scaffold in place; see `CLAUDE.md` for setup.
+## Status
+
+**P0 done: baseline on the board.** `naive-fixed@1` with vector top-10 and Sonnet 5.5 scores
+**66.7% (100/150)** on the FinanceBench **open subset** (not the full set), at $0.032 per correct
+answer at plain API rates ($0.016 with the Batch API). Accuracy is 81% when retrieval finds the
+evidence and 45% when it doesn't. See [`docs/results/p0-baseline.md`](docs/results/p0-baseline.md)
+for the failure analysis.
+
+Next, P1: metadata filters, table-preserving chunks, hybrid retrieval and a reranker, measured
+on a corpus with distractor fiscal years.
+
+## Reproduce
+
+Setup is in `CLAUDE.md`. Then:
+
+```
+frl bench pull && frl corpus fetch          # FinanceBench open subset + EDGAR filings
+frl ingest build naive-fixed@1 && frl ingest label naive-fixed@1
+frl run configs/p0-naive.toml               # prints the run id
+frl judge <run-id> && frl report <run-id>
+```
