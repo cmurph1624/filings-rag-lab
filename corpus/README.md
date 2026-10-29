@@ -2,7 +2,8 @@
 
 Small committed files that make the corpus reproducible. Downloaded filings live in `data/` (gitignored).
 
-- `companies.csv`: FinanceBench company name → ticker → SEC CIK. Activision Blizzard and Foot Locker
+- `companies.csv`: FinanceBench company name → ticker → SEC CIK, plus `aliases` (`;`-separated:
+  JPM, JnJ, AmEx, Coca Cola, Footlocker, Square...) that rules-based query scoping matches. Activision Blizzard and Foot Locker
   are no longer in SEC's ticker file (both acquired), so their CIKs come from EDGAR directly.
 - `overrides.csv`: hand-picked accessions for docs the rules can't settle, each with a reason.
 - `manifest.csv`: output of `frl corpus audit`, one row per FinanceBench document. Regenerate it, don't hand-edit it.

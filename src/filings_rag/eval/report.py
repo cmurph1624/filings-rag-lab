@@ -25,6 +25,7 @@ class RunSummary:
     pipeline: str
     corpus: str
     retriever: str
+    scope: str  # "none", or the mode and its options
     generation: str  # "–" for a retrieval-only run
     judge: str
     total: int  # questions in the set
@@ -38,6 +39,8 @@ class RunSummary:
     gen_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
     judge_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
     embed_cost: float = 0.0
+    aux_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
+    scopes: list[tuple[bool, str, int]] = field(default_factory=list)  # gold in, level, filings
     retrieve_s: list[float] = field(default_factory=list)
     generate_s: list[float] = field(default_factory=list)
 
@@ -46,8 +49,9 @@ class RunSummary:
         return self.verdicts["correct"]
 
     def system_cost(self, view: str) -> float:
-        """What answering cost: generation plus query embedding. The judge is eval overhead."""
-        return self.gen_cost[view] + self.embed_cost
+        """What answering cost: generation, query embedding and other models (the scope
+        model). The judge is eval overhead."""
+        return self.gen_cost[view] + self.embed_cost + self.aux_cost[view]
 
 
 def _views(model: str | None, usage: Usage, recorded: float) -> dict[str, float]:
@@ -79,6 +83,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
     name, raw, config_hash, sha, dirty = row
     cfg = from_dict(raw)
     r = resolve_spec(cfg.retriever)
+    sc = r.pop("scope", None)
     g = cfg.generation
     generated = g is not None
     total_row = conn.execute(
@@ -92,6 +97,9 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         pipeline=cfg.pipeline,
         corpus=cfg.corpus,
         retriever=" ".join([r["kind"]] + [f"{k}={v}" for k, v in r.items() if k != "kind"]),
+        scope=" ".join([sc["mode"]] + [f"{k}={v}" for k, v in sc.items() if k != "mode"])
+        if sc
+        else "none",
         generation=f"{g['backend']} {g['model']} {g['prompt']}" if g else "– (retrieval only)",
         judge=cfg.judge_key or "–",
         generated=generated,
@@ -128,6 +136,16 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
             s.verdicts[verdict] += 1
             s.by_type[qtype][verdict] += 1
         _add(s.judge_cost, _views(model, Usage(*tok), recorded))
+    for gold, scope, aux in conn.execute(
+        "SELECT q.doc_name, r.scope, r.aux FROM run_questions r"
+        " JOIN questions q ON q.id = r.question_id WHERE r.run_id = %s",
+        (run_id,),
+    ):
+        for a in aux.values():  # spend is recorded on failed rows too
+            _add(s.aux_cost, _views(a["model"], Usage(**a["usage"]), float(a["cost_usd"])))
+        if scope is not None:
+            level = scope["level"]
+            s.scopes.append((level == "corpus" or gold in scope["docs"], level, len(scope["docs"])))
     s.retrieval, s.unlabelled = rmetrics.load(conn, run_id, cfg.pipeline)
     conn.commit()
     return s
@@ -181,6 +199,7 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
                 ("pipeline", lambda s: s.pipeline),
                 ("corpus", lambda s: s.corpus),
                 ("retriever", lambda s: s.retriever),
+                ("scope", lambda s: s.scope),
                 ("generation", lambda s: s.generation),
                 ("judge", lambda s: s.judge),
                 ("answered", lambda s: f"{s.answered}/{s.total} ({s.errors} errors)"),
@@ -191,6 +210,8 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
     if not retrieval_only:
         out += _answers(runs, heads, rows)
     out += _retrieval(runs, heads, rows)
+    if any(s.scopes for s in runs):
+        out += _scoping(heads, rows)
     if not retrieval_only:
         out += _costs(heads, rows)
     latency: list[tuple[str, Any]] = [
@@ -274,6 +295,49 @@ def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str
     ]
 
 
+def _scoping(heads: list[str], rows: Rows) -> list[str]:
+    def count(level: str) -> Any:
+        return lambda s: _pct(sum(1 for _, lv, _ in s.scopes if lv == level), len(s.scopes))
+
+    def median_filings(s: RunSummary) -> str:
+        n = [k for _, lv, k in s.scopes if lv != "corpus"]
+        return f"{percentile([float(x) for x in n], 50):.0f}" if n else "–"
+
+    return [
+        "## Scoping",
+        "",
+        "How each question's search was narrowed before retrieval. *Filings*: the company's "
+        "filings for the periods the question names. *Company*: no filing matched the periods, "
+        "so all of the company's filings (a fallback). *Whole corpus*: no company found. "
+        "*Gold filing in scope*: the question's own filing was searchable (always true for the "
+        "whole corpus). Oracle scope searches only the gold filing: an upper bound, not a result.",
+        "",
+        _table(
+            heads,
+            rows(
+                ("narrowed to filings", count("filings")),
+                ("fell back to company", count("company")),
+                ("whole corpus", count("corpus")),
+                ("oracle", count("oracle")),
+                (
+                    "gold filing in scope",
+                    lambda s: (
+                        _pct(sum(1 for g, _, _ in s.scopes if g), len(s.scopes))
+                        if s.scopes
+                        else "–"
+                    ),
+                ),
+                ("filings in scope, median", median_filings),
+                (
+                    "scope model cost (plain API)",
+                    lambda s: _usd(s.aux_cost["plain API"]) if s.scopes else "–",
+                ),
+            ),
+        ),
+        "",
+    ]
+
+
 def _costs(heads: list[str], rows: Rows) -> list[str]:
     cost_rows: list[tuple[str, Any]] = []
     for v in COST_VIEWS:
@@ -298,7 +362,9 @@ def _costs(heads: list[str], rows: Rows) -> list[str]:
         "figure depends on what earlier runs left in the cache. *Plain API* is the same tokens "
         "as an uncached API call and *Batch API* is that at the batch discount; these two are "
         "comparable across runs and backends. Answering cost is "
-        "generation plus query embedding; the judge is eval overhead and is shown on its own.",
+        "generation, query embedding and any scope model (counted on every run, even when its "
+        "result came from the cache, so runs compare as deployed systems); the judge is eval "
+        "overhead and is shown on its own.",
         "",
         _table(heads, rows(*cost_rows)),
         "",

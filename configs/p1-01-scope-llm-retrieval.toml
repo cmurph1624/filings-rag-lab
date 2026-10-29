@@ -1,0 +1,14 @@
+# Retrieval-only: p1-00 (naive, fb-distractors@1) plus llm query scoping.
+# A small model (claude-cli Haiku 5.5, prompt scope@1) extracts company and periods; cached.
+name = "p1-01-scope-llm-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+search = "exact"
+
+[retriever.scope]
+mode = "llm"

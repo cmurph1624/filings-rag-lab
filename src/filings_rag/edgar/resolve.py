@@ -19,7 +19,8 @@ from typing import Any, Protocol
 
 DOC_NAME = re.compile(
     r"^(?P<company>.+?)_(?P<year>\d{4})(?:Q(?P<quarter>[1-4]))?_(?P<kind>10K|10Q|8K|EARNINGS)"
-    r"(?:_dated[-_](?P<dated>\d{4}-\d{2}-\d{2}))?$",
+    r"(?:_dated[-_](?P<dated>\d{4}-\d{2}-\d{2}))?"
+    r"(?:_(?P<period_end>\d{4}-\d{2}-\d{2}))?$",  # distractors whose plain name was taken
     re.IGNORECASE,
 )
 LINK_ACCESSION = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")

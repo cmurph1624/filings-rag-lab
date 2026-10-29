@@ -5,6 +5,8 @@ worker pool, so one connection is enough. Each answer commits on its own.
 
 Tokens and costs on a run_questions row are summed over attempts (a failed attempt that
 reported no usage adds nothing); the answer and retrieved chunks are from the latest attempt.
+`scope` and `aux` (spend of other models, e.g. the scope model) are also from the latest
+attempt: a retried question reuses its cached scope, so its cost is counted once.
 """
 
 import subprocess
@@ -25,6 +27,7 @@ from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, embedding_cost, model_cost
 from filings_rag.retrieve.base import Retrieval, RetrievalError, Retriever
+from filings_rag.retrieve.scope import Scope, Scoper
 
 Log = Callable[[str], None]
 
@@ -89,6 +92,7 @@ class RunStats:
     gen_cost: float = 0.0
     embed_cost: float = 0.0
     reported_cost: float = 0.0  # sum of what the backend reported, for cross-checking
+    aux_cost: float = 0.0  # other models (query scoping), API-equivalent
     stopped_early: bool = False
     paused: str | None = None  # the usage governor's reason, when it stopped the run
     finished: bool = False
@@ -99,17 +103,19 @@ class _Job:
     question_id: str
     retrieval: Retrieval
     retrieve_s: float
+    scope: Scope | None = None
 
 
 _RECORD = """
 INSERT INTO run_questions
     (run_id, question_id, git_sha, retrieved, answer, model, stop_reason,
      input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens,
-     embed_tokens, gen_cost_usd, embed_cost_usd, reported_cost_usd, retrieve_s, generate_s, error)
+     embed_tokens, gen_cost_usd, embed_cost_usd, reported_cost_usd, retrieve_s, generate_s, error,
+     scope, aux)
 VALUES (%(run_id)s, %(qid)s, %(git_sha)s, %(retrieved)s, %(answer)s, %(model)s, %(stop)s,
         %(inp)s, %(out)s, %(cr)s, %(cw)s, %(cw1h)s,
         %(emb)s, %(gen_cost)s, %(emb_cost)s, %(reported)s, %(retrieve_s)s, %(generate_s)s,
-        %(error)s)
+        %(error)s, %(scope)s, %(aux)s)
 ON CONFLICT (run_id, question_id) DO UPDATE SET
     git_sha = EXCLUDED.git_sha,
     attempts = run_questions.attempts + 1,
@@ -131,6 +137,8 @@ ON CONFLICT (run_id, question_id) DO UPDATE SET
     retrieve_s = EXCLUDED.retrieve_s,
     generate_s = EXCLUDED.generate_s,
     error = EXCLUDED.error,
+    scope = EXCLUDED.scope,
+    aux = EXCLUDED.aux,
     answered_at = now()
 """
 
@@ -161,6 +169,7 @@ def execute(
     prompt: Prompt | None,
     git: GitInfo,
     *,
+    scoper: Scoper | None = None,
     limit: int | None = None,
     log: Log = print,
 ) -> RunStats:
@@ -191,6 +200,8 @@ def execute(
             {"chunk_id": h.chunk_id, "doc_name": h.doc_name, "page": h.page, "score": h.score}
             for h in (job.retrieval.hits if job else [])
         ]
+        scope = job.scope if job else None
+        aux = {"scope": scope.aux} if scope and scope.aux else {}
         conn.execute(
             _RECORD,
             {
@@ -213,6 +224,8 @@ def execute(
                 "retrieve_s": job.retrieve_s if job else None,
                 "generate_s": result.latency_s if result else None,
                 "error": error,
+                "scope": Jsonb(scope.record) if scope else None,
+                "aux": Jsonb(aux),
             },
         )
         conn.commit()
@@ -221,6 +234,7 @@ def execute(
         stats.gen_cost += gen_cost
         stats.embed_cost += emb_cost
         stats.reported_cost += (result.reported_cost_usd or 0.0) if result else 0.0
+        stats.aux_cost += sum(float(a["cost_usd"]) for a in aux.values())
         if error is None:
             stats.answered += 1
             streak = 0
@@ -258,16 +272,28 @@ def execute(
                 log(f"stopping: {streak} failures in a row (resume with --resume {run_id})")
                 break
             start = time.monotonic()
+            scope: Scope | None = None
+            if scoper is not None:
+                try:
+                    scope = scoper.scope(qid, question)
+                except UsagePaused as e:  # nothing recorded; resume scopes it again
+                    stats.paused = str(e)
+                    break
+                except Exception as e:
+                    conn.rollback()
+                    record(None, qid, None, f"scope: {type(e).__name__}: {e}")
+                    continue
             try:
-                retrieval = retriever.retrieve(question)
+                retrieval = retriever.retrieve(question, scope.documents if scope else None)
             except Exception as e:
                 conn.rollback()
-                spent = None
+                # Keep the scope (and any scope-model spend) on the failed row.
+                spent = _Job(qid, Retrieval([], 0, ""), 0.0, scope) if scope else None
                 if isinstance(e, RetrievalError):  # the query was embedded before the failure
-                    spent = _Job(qid, Retrieval([], e.embed_tokens, e.embedder), 0.0)
+                    spent = _Job(qid, Retrieval([], e.embed_tokens, e.embedder), 0.0, scope)
                 record(spent, qid, None, f"retrieval: {type(e).__name__}: {e}")
                 continue
-            job = _Job(qid, retrieval, time.monotonic() - start)
+            job = _Job(qid, retrieval, time.monotonic() - start, scope)
             if backend is None or prompt is None:
                 record(job, qid, None, None)
                 continue
