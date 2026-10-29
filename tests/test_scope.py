@@ -131,3 +131,12 @@ def test_scope_prompts_are_not_edited_in_place() -> None:
     p = S.get_scope_prompt("scope@1")
     digest = hashlib.sha256(f"{p.system}\0{p.template}".encode()).hexdigest()[:16]
     assert digest == "8921b9c7e76fb10c"
+
+
+def test_a_figure_that_looks_like_a_year_only_widens_the_years() -> None:
+    assert S.parse_periods("FY2022 guidance of 2024 stores") == ([2022, 2024], [])
+
+
+def test_malformed_llm_fields_are_dropped_not_fatal() -> None:
+    reply = '{"company": 7, "years": [2022, "soon"], "quarters": [[2023], [2023, 5], [2023, 2]]}'
+    assert S.parse_llm_mentions(reply, ["Boeing"]) == S.Mentions(None, [2022], [(2023, 2)])

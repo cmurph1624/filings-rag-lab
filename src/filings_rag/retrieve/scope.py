@@ -71,6 +71,9 @@ def parse_periods(text: str) -> tuple[list[int], list[tuple[int, int]]]:
     years = {_year(m[1]) for m in FY.finditer(text)}
     years |= {int(m[1]) for m in PLAIN_YEAR.finditer(text)}
     years |= {y for y, _ in quarters}
+    # Any 19xx/20xx number counts as a year, so a figure like "2,024 units" written "2024"
+    # over-matches. That is accepted: a spurious year widens the scope (costs precision), it
+    # never drops the filing the question is about.
     return sorted(years), sorted(quarters)
 
 
@@ -113,11 +116,23 @@ class Mentions:
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Mentions":
-        return cls(
-            d.get("company"),
-            sorted({int(y) for y in d.get("years", [])}),
-            sorted({(int(y), int(q)) for y, q in d.get("quarters", [])}),
-        )
+        """Lenient: years that aren't integers and quarters that aren't [year, 1-4] are dropped."""
+        years: set[int] = set()
+        for y in d.get("years") or []:
+            try:
+                years.add(int(y))
+            except (TypeError, ValueError):
+                continue
+        quarters: set[tuple[int, int]] = set()
+        for pair in d.get("quarters") or []:
+            try:
+                y, q = (int(x) for x in pair)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= q <= 4:
+                quarters.add((y, q))
+        company = d.get("company")
+        return cls(company if isinstance(company, str) else None, sorted(years), sorted(quarters))
 
 
 def rules_mentions(text: str, patterns: list[tuple[str, re.Pattern[str]]]) -> Mentions:
@@ -298,10 +313,15 @@ class Scoper:
             docs, level = select(self._labels, m, self.spec.get("lookahead", 0))
             mentions = m.to_json()
         record = {"mode": self.mode, **mentions, "level": level}
+        if aux and aux.get("parse_error"):
+            record["parse_error"] = aux["parse_error"]
         record["docs"] = [d.doc_name for d in docs] if level != "corpus" else []
         return Scope([d.id for d in docs], record, aux)
 
     def _llm(self, question_id: str, question: str) -> tuple[Mentions, dict[str, Any]]:
+        """Mentions from the scope model, cached. A reply that won't parse is treated like rules
+        that found nothing (no company: the whole corpus), and is cached with its cost and the
+        parse error, so the spend is recorded and a resume doesn't pay for it again."""
         row = self._conn.execute(
             "SELECT mentions, model, usage, cost_usd FROM query_scopes"
             " WHERE question_id = %s AND scope_key = %s",
@@ -310,21 +330,30 @@ class Scoper:
         self._conn.commit()
         if row is not None:
             mentions, model, usage, cost = row
-            aux = {"model": model, "usage": usage, "cost_usd": cost, "cached": True}
-            return Mentions.from_json(mentions), aux
+            hit = {"model": model, "usage": usage, "cost_usd": cost, "cached": True}
+            if mentions.get("parse_error"):
+                hit["parse_error"] = mentions["parse_error"]
+            return Mentions.from_json(mentions), hit
         assert self._backend is not None
         names = [c.name for c in self._companies]
         result = self._backend.generate(self._prompt.system, self._prompt.render(question, names))
         cost = model_cost(result.model, result.usage)
-        m = parse_llm_mentions(result.text, names)
         usage = asdict(result.usage)
+        aux: dict[str, Any] = {"model": result.model, "usage": usage, "cost_usd": cost}
+        try:
+            m = parse_llm_mentions(result.text, names)
+            stored = m.to_json()
+        except ValueError as e:  # json.JSONDecodeError is a ValueError
+            m = Mentions(None)
+            aux["parse_error"] = f"{e}"[:300]
+            stored = {**m.to_json(), "parse_error": aux["parse_error"]}
         self._conn.execute(
             "INSERT INTO query_scopes (question_id, scope_key, mentions, model, usage, cost_usd)"
             " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-            (question_id, self.key, Jsonb(m.to_json()), result.model, Jsonb(usage), cost),
+            (question_id, self.key, Jsonb(stored), result.model, Jsonb(usage), cost),
         )
         self._conn.commit()
-        return m, {"model": result.model, "usage": usage, "cost_usd": cost, "cached": False}
+        return m, {**aux, "cached": False}
 
 
 def read_companies(path: Path) -> tuple[list[Company], dict[int, str]]:

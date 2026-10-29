@@ -416,3 +416,26 @@ def test_rules_scope_without_a_company_searches_the_corpus(conn: psycopg.Connect
     _, rows = _scoped_run(conn, scoper, RecordingRetriever())
     scope, aux = rows[0]
     assert scope["level"] == "corpus" and scope["docs"] == [] and aux == {}
+
+
+class BadScopeBackend(FakeScopeBackend):
+    def generate(self, system: str, prompt: str) -> Result:
+        self.calls += 1
+        return Result(
+            "I'm not sure.", Usage(input_tokens=300, output_tokens=5), 1.0, self.model, "end_turn"
+        )
+
+
+def test_unparseable_llm_scope_is_costed_cached_and_searches_the_corpus(
+    conn: psycopg.Connection,
+) -> None:  # type: ignore[type-arg]
+    labels = [DocLabel(1, DOC, "ZZ", 2022, "FY")]
+    spec = {"mode": "llm", "lookahead": 0, "backend": "fake", "model": "m", "prompt": "scope@1"}
+    backend = BadScopeBackend()
+    scoper = Scoper(conn, spec, labels, [Company("ZZ", "ZZQ", ())], backend)
+    stats, rows = _scoped_run(conn, scoper, RecordingRetriever())
+    scope, aux = rows[0]
+    assert stats.failed == 0 and scope["level"] == "corpus" and "no JSON" in scope["parse_error"]
+    assert aux["scope"]["cost_usd"] > 0 and aux["scope"]["cached"] is False
+    _scoped_run(conn, scoper, RecordingRetriever())
+    assert backend.calls == 2  # 2 questions, each paid once: the second run is all cache
