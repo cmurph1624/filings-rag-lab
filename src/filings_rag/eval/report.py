@@ -23,6 +23,7 @@ class RunSummary:
     config_hash: str
     git: str
     pipeline: str
+    corpus: str
     retriever: str
     generation: str  # "–" for a retrieval-only run
     judge: str
@@ -89,6 +90,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         config_hash=config_hash,
         git=sha[:10] + (" (dirty)" if dirty else ""),
         pipeline=cfg.pipeline,
+        corpus=cfg.corpus,
         retriever=" ".join([r["kind"]] + [f"{k}={v}" for k, v in r.items() if k != "kind"]),
         generation=f"{g['backend']} {g['model']} {g['prompt']}" if g else "– (retrieval only)",
         judge=cfg.judge_key or "–",
@@ -177,6 +179,7 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
                 ("config", lambda s: f"{s.name} `{s.config_hash}`"),
                 ("git", lambda s: f"`{s.git}`"),
                 ("pipeline", lambda s: s.pipeline),
+                ("corpus", lambda s: s.corpus),
                 ("retriever", lambda s: s.retriever),
                 ("generation", lambda s: s.generation),
                 ("judge", lambda s: s.judge),

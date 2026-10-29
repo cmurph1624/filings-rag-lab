@@ -1,0 +1,10 @@
+# Retrieval-only twin of p1-00-naive-distractors: same index, retriever and corpus.
+name = "p1-00-naive-distractors-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+search = "exact"

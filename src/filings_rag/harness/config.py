@@ -7,11 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from filings_rag import corpora
 from filings_rag.retrieve.factory import resolve_spec
 
 REQUIRED = {"name", "pipeline", "retriever"}
 # No [generation] means a retrieval-only run: retrieval is scored, no model is called.
-OPTIONAL = {"questions", "execution", "generation", "judge"}
+OPTIONAL = {"questions", "corpus", "execution", "generation", "judge"}
 NOT_HASHED = {"name", "execution"}  # labels and how-to-run settings don't change results
 EXECUTION_DEFAULTS: dict[str, int] = {"concurrency": 2, "max_consecutive_failures": 5}
 
@@ -20,6 +21,7 @@ EXECUTION_DEFAULTS: dict[str, int] = {"concurrency": 2, "max_consecutive_failure
 class RunConfig:
     name: str
     pipeline: str  # name@version
+    corpus: str  # name@version of the filings searched
     retriever: dict[str, Any]
     generation: dict[str, Any] | None  # {backend, model, prompt, effort?}; None: retrieval only
     judge: dict[str, Any] | None  # {backend, model, prompt, effort?}; pinned per run
@@ -31,6 +33,11 @@ class RunConfig:
     def hash(self) -> str:
         shaped = {k: v for k, v in self.raw.items() if k not in NOT_HASHED}
         shaped["questions"] = self.questions
+        # The default corpus is what every config without the key searched, so leaving it out
+        # keeps those (P0) hashes unchanged; any other corpus is hashed.
+        shaped.pop("corpus", None)
+        if self.corpus != corpora.DEFAULT:
+            shaped["corpus"] = self.corpus
         shaped["retriever"] = resolve_spec(self.retriever)  # code defaults count too
         blob = json.dumps(shaped, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
@@ -71,6 +78,8 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
             if table in raw and key not in raw[table]:
                 raise ValueError(f"[{table}] needs {key!r}")
     resolve_spec(raw["retriever"])  # fail on a bad [retriever] at load time, not mid-run
+    corpus = raw.get("corpus", corpora.DEFAULT)
+    corpora.parse_ref(corpus)
     execution = dict(raw.get("execution", {}))
     bad = execution.keys() - EXECUTION_DEFAULTS.keys()
     if bad:
@@ -78,6 +87,7 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
     return RunConfig(
         name=raw["name"],
         pipeline=raw["pipeline"],
+        corpus=corpus,
         retriever=dict(raw["retriever"]),
         generation=dict(raw["generation"]) if "generation" in raw else None,
         judge=dict(raw["judge"]) if "judge" in raw else None,

@@ -1,8 +1,9 @@
-"""Pure vector top-k over one pipeline's chunk table: no filters, no reranking (the P0 baseline).
+"""Pure vector top-k over one pipeline's chunk table, limited to a corpus's documents.
 
 `search` is explicit so the Postgres planner can't change results behind our back:
 - "exact": a full scan, true top-k by cosine distance (the default; ~0.1 s at 17K chunks).
-- "hnsw": the approximate HNSW index, with `ef_search` candidates.
+- "hnsw": the approximate HNSW index, with `ef_search` candidates. With a document filter,
+  pgvector's iterative scan (strict order) keeps fetching until k rows pass it.
 """
 
 from typing import Any
@@ -16,11 +17,12 @@ from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
 _QUERY = """
 SELECT c.id, d.doc_name, c.page, c.text, 1 - c.dist AS score
 FROM (SELECT id, document_id, page, text, embedding <=> %(q)s::vector AS dist
-      FROM {t} ORDER BY embedding <=> %(q)s::vector LIMIT %(k)s) c
+      FROM {t} {where} ORDER BY embedding <=> %(q)s::vector LIMIT %(k)s) c
 JOIN documents d ON d.id = c.document_id
 ORDER BY c.dist, c.id
 """
 SEARCH = ("exact", "hnsw")
+MAX_SCAN_TUPLES = 20_000  # pgvector's default, pinned so a server change can't move results
 
 
 class VectorRetriever:
@@ -33,6 +35,7 @@ class VectorRetriever:
         k: int = 10,
         search: str = "exact",
         ef_search: int = 100,
+        documents: list[int] | None = None,
     ) -> None:
         if k < 1:
             raise ValueError("k must be at least 1")
@@ -44,6 +47,8 @@ class VectorRetriever:
         self.k = k
         self.search = search
         self.ef_search = max(ef_search, k)  # HNSW returns at most ef_search rows
+        self.documents = documents  # None: every document in the table
+        self._where = sql.SQL("WHERE document_id = ANY(%(docs)s)" if documents is not None else "")
 
     def _settings(self) -> list[sql.SQL | sql.Composed]:
         if self.search == "exact":
@@ -51,6 +56,8 @@ class VectorRetriever:
         return [
             sql.SQL("SET LOCAL enable_seqscan = off"),
             sql.SQL("SET LOCAL hnsw.ef_search = {}").format(sql.Literal(self.ef_search)),
+            sql.SQL("SET LOCAL hnsw.iterative_scan = strict_order"),
+            sql.SQL("SET LOCAL hnsw.max_scan_tuples = {}").format(sql.Literal(MAX_SCAN_TUPLES)),
         ]
 
     def query(self, vector: list[float]) -> list[Hit]:
@@ -58,7 +65,8 @@ class VectorRetriever:
             for stmt in self._settings():
                 self._conn.execute(stmt)
             rows = self._conn.execute(
-                sql.SQL(_QUERY).format(t=self._table), {"q": to_pgvector(vector), "k": self.k}
+                sql.SQL(_QUERY).format(t=self._table, where=self._where),
+                {"q": to_pgvector(vector), "k": self.k, "docs": self.documents},
             ).fetchall()
         return [Hit(cid, doc, page, float(score), text) for cid, doc, page, text, score in rows]
 
@@ -68,4 +76,11 @@ class VectorRetriever:
             hits = self.query(out.vectors[0])
         except psycopg.Error as e:
             raise RetrievalError(str(e), out.tokens, self._embedder.name) from e
+        if len(hits) < self.k and self.search == "hnsw" and self.documents is not None:
+            # The filtered iterative scan gave up (max_scan_tuples) before k rows passed.
+            raise RetrievalError(
+                f"hnsw returned {len(hits)} of {self.k} hits within the corpus filter",
+                out.tokens,
+                self._embedder.name,
+            )
         return Retrieval(hits, out.tokens, self._embedder.name)

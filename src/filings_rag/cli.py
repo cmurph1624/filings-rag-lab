@@ -6,11 +6,11 @@ from typing import Annotated
 import psycopg
 import typer
 
-from filings_rag import db
+from filings_rag import corpora, db
 from filings_rag.backends.factory import make_backend
 from filings_rag.benchmark import financebench
 from filings_rag.config import get_settings
-from filings_rag.edgar import fetch, resolve
+from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
@@ -76,18 +76,59 @@ def corpus_audit() -> None:
             typer.echo(f"  {r.status:10} {r.doc_name}  {r.note}")
 
 
+@corpus_app.command("expand")
+def corpus_expand(
+    ten_k_from: int = typer.Option(2015, help="First fiscal year of distractor 10-Ks"),
+    ten_k_to: int = typer.Option(2023, help="Last fiscal year of distractor 10-Ks"),
+    ten_q_from: int = typer.Option(2021, help="First fiscal year of distractor 10-Qs"),
+    ten_q_to: int = typer.Option(2024, help="Last fiscal year of distractor 10-Qs"),
+) -> None:
+    """List the benchmark companies' other filings as distractors; write corpus/distractors.csv.
+
+    Every company gets its other 10-Ks; companies with a 10-Q question also get other 10-Qs.
+    """
+    settings = get_settings()
+    client = EdgarClient(settings.sec_user_agent, DATA / "edgar" / "cache")
+    gold = fetch.read_manifest(CORPUS / "manifest.csv")
+    companies = resolve.read_companies(CORPUS / "companies.csv")
+    prefixes = expand.company_prefixes(gold)
+    quarterly = expand.quarterly_companies(gold)
+    window = expand.Window(range(ten_k_from, ten_k_to + 1), range(ten_q_from, ten_q_to + 1))
+    gold_accessions = {r.accession for r in gold if r.accession}
+    taken = {r.doc_name for r in gold}
+    rows: list[resolve.ManifestRow] = []
+    for company, cik in sorted(companies.items()):
+        found, notes = expand.distractors(
+            company,
+            cik,
+            prefixes[company],
+            expand.wanted(window, company in quarterly),
+            client.submissions(cik),
+            resolve.periodic_filings(client.companyfacts(cik)),
+            gold_accessions,
+            taken,
+        )
+        rows += found
+        for n in notes:
+            typer.echo(f"  {n}")
+    resolve.write_manifest(rows, CORPUS / "distractors.csv")
+    typer.echo(
+        f"{len(rows)} distractors: "
+        + ", ".join(f"{k} {v}" for k, v in sorted(Counter(r.form for r in rows).items()))
+    )
+
+
 @corpus_app.command("fetch")
 def corpus_fetch(
     only: str = typer.Option("", help="Fetch just this doc_name"),
+    manifest: str = typer.Option("manifest.csv", help="Manifest under corpus/"),
 ) -> None:
     """Download every resolved manifest filing, extract text, and upsert `documents`."""
     settings = get_settings()
     client = EdgarClient(settings.sec_user_agent, DATA / "edgar" / "cache")
     with (CORPUS / "companies.csv").open() as fh:
         tickers = {r["company"]: r["ticker"] for r in csv.DictReader(fh)}
-    rows = [
-        r for r in fetch.read_manifest(CORPUS / "manifest.csv") if not only or r.doc_name == only
-    ]
+    rows = [r for r in fetch.read_manifest(CORPUS / manifest) if not only or r.doc_name == only]
     failed = 0
     with psycopg.connect(settings.database_url) as conn:
         for r in rows:
@@ -101,6 +142,23 @@ def corpus_fetch(
     typer.echo(f"fetched {len(rows) - failed}/{len(rows)}")
     if failed:
         raise typer.Exit(1)
+
+
+@corpus_app.command("define")
+def corpus_define(
+    ref: str = typer.Argument(..., help="name@version, e.g. fb-distractors@1"),
+) -> None:
+    """Record a corpus's filings from its manifests (immutable once defined)."""
+    _, _, corpus = corpora.parse_ref(ref)
+    accessions = {
+        r.accession
+        for m in corpus.manifests
+        for r in fetch.read_manifest(CORPUS / m)
+        if r.source == "edgar" and r.accession
+    }
+    with psycopg.connect(get_settings().database_url) as conn:
+        n = corpora.define(conn, ref, accessions)
+    typer.echo(f"{ref}: {n} filings")
 
 
 @ingest_app.command("build")
@@ -152,7 +210,11 @@ def run_cmd(
     with psycopg.connect(settings.database_url) as conn:
         table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
         retriever = make_retriever(
-            conn, cfg.retriever, table, make_embedder(embedder_name, dims, settings)
+            conn,
+            cfg.retriever,
+            table,
+            make_embedder(embedder_name, dims, settings),
+            corpora.document_ids(conn, cfg.corpus, table),
         )
         spec = cfg.backend_spec
         backend = make_backend(spec) if spec else None  # None: retrieval-only run
@@ -162,7 +224,7 @@ def run_cmd(
             run_id = resume
         else:
             run_id = harness.create_run(conn, cfg, git)
-        typer.echo(f"run {run_id}: {cfg.name} (config {cfg.hash})")
+        typer.echo(f"run {run_id}: {cfg.name} on {cfg.corpus} (config {cfg.hash})")
         s = harness.execute(
             conn, run_id, cfg, retriever, backend, prompt, git, limit=limit, log=typer.echo
         )
