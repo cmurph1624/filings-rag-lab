@@ -188,7 +188,11 @@ def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
         if row is None:
             typer.echo(f"no run {run_id}", err=True)
             raise typer.Exit(1)
-        cfg = run_config.from_dict(row[0])
+        try:
+            cfg = run_config.from_dict(row[0])
+        except ValueError as e:  # e.g. runs stored before judge prompts were versioned
+            typer.echo(f"run {run_id}'s stored config no longer loads ({e}); re-run it", err=True)
+            raise typer.Exit(1) from e
         typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
         s = judging.judge_run(
             conn,
@@ -215,7 +219,11 @@ def report_cmd(
 ) -> None:
     """Accuracy, retrieval recall, cost and latency for one or more runs, as markdown."""
     with psycopg.connect(get_settings().database_url) as conn:
-        text = report.render([report.summarize(conn, r) for r in [run_id, *(vs or [])]])
+        try:
+            text = report.render([report.summarize(conn, r) for r in [run_id, *(vs or [])]])
+        except ValueError as e:  # unknown run, or a stored config that no longer loads
+            typer.echo(f"cannot report: {e}", err=True)
+            raise typer.Exit(1) from e
     if out:
         Path(out).write_text(text)
     typer.echo(text)
