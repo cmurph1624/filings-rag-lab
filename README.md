@@ -25,8 +25,8 @@ on a corpus with distractor fiscal years.
 Setup is in `CLAUDE.md`. Then:
 
 ```
-frl bench pull && frl corpus fetch          # FinanceBench open subset + EDGAR filings
-frl ingest build naive-fixed@1 && frl ingest label naive-fixed@1
-frl run configs/p0-naive.toml               # prints the run id
-frl judge <run-id> && frl report <run-id>
+uv run frl bench pull && uv run frl corpus fetch  # FinanceBench open subset + EDGAR filings
+uv run frl ingest build naive-fixed@1 && uv run frl ingest label naive-fixed@1
+uv run frl run configs/p0-naive.toml        # prints the run id
+uv run frl judge <run-id> && uv run frl report <run-id>
 ```

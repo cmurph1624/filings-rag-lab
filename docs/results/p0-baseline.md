@@ -103,8 +103,8 @@ of extra years in the index.
 - `10130` Corning FY2020 DPO: the model found the payables but not FY2020 COGS, so it
   declined.
 - Also: `00540` AES and `00711` J&J inventory turnover, `03620` PepsiCo EBITDA less capex,
-  `04080` Nike inventory turnover, `04103` General Mills CCC, `07966` Activision 3-year capex,
-  `10130` Corning DPO.
+  `04080` Nike inventory turnover, `04103` General Mills CCC, and `07966` Activision 3-year
+  capex.
 
 The refusals are the right behaviour. What's wrong is retrieving one chunk per statement
 line. This is the clearest case for statement-level retrieval or XBRL facts (P2).
@@ -151,7 +151,7 @@ This is the case for the P1 `table-preserving` pipeline.
   accepts a hedge that the judge penalised elsewhere, a mild inconsistency in `judge@1`.
 - **Every miss:** all 50 were read and bucketed above. 3 look like judge or gold strictness, so
   accuracy might be about 2 points higher with a more lenient judge.
-- **Judge is not part of the score:** it's pinned per run (`claude-cli:claude-opus-5-5:judge@1`),
+- **Judge is pinned:** it's fixed per run (`claude-cli:claude-opus-5-5:judge@1`),
   so later pipelines are graded the same way.
 
 ## Cost
