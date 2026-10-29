@@ -1,7 +1,7 @@
 """Retrievers turn a question into ranked chunks from one pipeline's index."""
 
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,9 @@ class Retrieval:
     hits: list[Hit]  # best first
     embed_tokens: int  # query-embedding tokens spent
     embedder: str  # price-table key for those tokens
+    # Spend of other models in this retrieval, by component (e.g. "rerank": {model, tokens,
+    # cost_usd}); recorded in run_questions.aux.
+    aux: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class RetrievalError(RuntimeError):

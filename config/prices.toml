@@ -34,3 +34,11 @@ long_output = 2.50
 
 [embeddings.voyage-finance-2]
 input = 0.12            # first 50M tokens per account are free; we still price at list
+
+# Rerankers, per million tokens (query + documents, as the API's usage reports). Voyage's page
+# also lists free tokens for some models; we price at list.
+[rerankers.rerank-3]
+input = 0.05
+
+[rerankers.rerank-3-lite]
+input = 0.02

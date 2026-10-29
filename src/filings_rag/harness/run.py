@@ -92,7 +92,7 @@ class RunStats:
     gen_cost: float = 0.0
     embed_cost: float = 0.0
     reported_cost: float = 0.0  # sum of what the backend reported, for cross-checking
-    aux_cost: float = 0.0  # other models (query scoping), API-equivalent
+    aux_cost: float = 0.0  # other models (scope model, reranker), API-equivalent
     stopped_early: bool = False
     paused: str | None = None  # the usage governor's reason, when it stopped the run
     finished: bool = False
@@ -202,6 +202,8 @@ def execute(
         ]
         scope = job.scope if job else None
         aux = {"scope": scope.aux} if scope and scope.aux else {}
+        if job is not None:
+            aux |= job.retrieval.aux  # e.g. the reranker's spend
         conn.execute(
             _RECORD,
             {

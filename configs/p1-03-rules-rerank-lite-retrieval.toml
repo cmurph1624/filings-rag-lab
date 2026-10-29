@@ -1,0 +1,13 @@
+# Retrieval-only: as p1-03-rules-rerank with the cheaper rerank-3-lite.
+name = "p1-03-rules-rerank-lite-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3-lite", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"

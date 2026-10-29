@@ -461,3 +461,17 @@ def test_scalar_llm_scope_fields_still_cost_and_cache(conn: psycopg.Connection) 
     assert stats.failed == 0 and scope["level"] == "corpus" and aux["scope"]["cost_usd"] > 0
     _scoped_run(conn, scoper, RecordingRetriever())
     assert backend.calls == 2
+
+
+class RerankedRetriever(FakeRetriever):
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
+        spend = {"model": "rerank-3", "tokens": 2000, "cost_usd": 1e-4}
+        return Retrieval([], 4, "voyage-finance-2", {"rerank": spend})
+
+
+def test_rerank_spend_is_recorded_on_the_row(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    stats, rows = _scoped_run(conn, None, RerankedRetriever())
+    assert rows[0][0] is None and rows[0][1] == {
+        "rerank": {"model": "rerank-3", "tokens": 2000, "cost_usd": 1e-4}
+    }
+    assert stats.aux_cost == pytest.approx(2e-4)

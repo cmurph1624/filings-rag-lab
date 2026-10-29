@@ -26,6 +26,7 @@ class RunSummary:
     corpus: str
     retriever: str
     scope: str  # "none", or the mode and its options
+    rerank: str  # "none", or model and candidates
     generation: str  # "–" for a retrieval-only run
     judge: str
     total: int  # questions in the set
@@ -40,6 +41,7 @@ class RunSummary:
     judge_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
     embed_cost: float = 0.0
     aux_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
+    component_cost: dict[str, float] = field(default_factory=dict)  # plain API, by component
     scopes: list[tuple[bool, str, int]] = field(default_factory=list)  # gold in, level, filings
     retrieve_s: list[float] = field(default_factory=list)
     generate_s: list[float] = field(default_factory=list)
@@ -84,6 +86,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
     cfg = from_dict(raw)
     r = resolve_spec(cfg.retriever)
     sc = r.pop("scope", None)
+    rr = r.pop("rerank", None)
     g = cfg.generation
     generated = g is not None
     total_row = conn.execute(
@@ -100,6 +103,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         scope=" ".join([sc["mode"]] + [f"{k}={v}" for k, v in sc.items() if k != "mode"])
         if sc
         else "none",
+        rerank=f"{rr['model']} over {rr['candidates']} candidates" if rr else "none",
         generation=f"{g['backend']} {g['model']} {g['prompt']}" if g else "– (retrieval only)",
         judge=cfg.judge_key or "–",
         generated=generated,
@@ -141,8 +145,16 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         " JOIN questions q ON q.id = r.question_id WHERE r.run_id = %s",
         (run_id,),
     ):
-        for a in aux.values():  # spend is recorded on failed rows too
-            _add(s.aux_cost, _views(a["model"], Usage(**a["usage"]), float(a["cost_usd"])))
+        for component, a in aux.items():  # spend is recorded on failed rows too
+            cost = float(a["cost_usd"])
+            # Model calls get the three views; a reranker bills tokens at one rate in all views.
+            views = (
+                _views(a["model"], Usage(**a["usage"]), cost)
+                if "usage" in a
+                else dict.fromkeys(COST_VIEWS, cost)
+            )
+            _add(s.aux_cost, views)
+            s.component_cost[component] = s.component_cost.get(component, 0.0) + views["plain API"]
         if scope is not None:
             level = scope["level"]
             s.scopes.append((level == "corpus" or gold in scope["docs"], level, len(scope["docs"])))
@@ -200,6 +212,7 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
                 ("corpus", lambda s: s.corpus),
                 ("retriever", lambda s: s.retriever),
                 ("scope", lambda s: s.scope),
+                ("rerank", lambda s: s.rerank),
                 ("generation", lambda s: s.generation),
                 ("judge", lambda s: s.judge),
                 ("answered", lambda s: f"{s.answered}/{s.total} ({s.errors} errors)"),
@@ -289,6 +302,12 @@ def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str
                     "questions scored",
                     lambda s: f"{len(s.retrieval)} ({s.unlabelled} without labels)",
                 ),
+                (
+                    "rerank cost (list)",
+                    lambda s: (
+                        _usd(s.component_cost["rerank"]) if "rerank" in s.component_cost else "–"
+                    ),
+                ),
             ),
         ),
         "",
@@ -330,7 +349,7 @@ def _scoping(heads: list[str], rows: Rows) -> list[str]:
                 ("filings in scope, median", median_filings),
                 (
                     "scope model cost (plain API)",
-                    lambda s: _usd(s.aux_cost["plain API"]) if s.scopes else "–",
+                    lambda s: _usd(s.component_cost.get("scope", 0.0)) if s.scopes else "–",
                 ),
             ),
         ),
@@ -362,7 +381,8 @@ def _costs(heads: list[str], rows: Rows) -> list[str]:
         "figure depends on what earlier runs left in the cache. *Plain API* is the same tokens "
         "as an uncached API call and *Batch API* is that at the batch discount; these two are "
         "comparable across runs and backends. Answering cost is "
-        "generation, query embedding and any scope model (counted on every run, even when its "
+        "generation, query embedding, any reranker and any scope model (counted on every run, "
+        "even when its "
         "result came from the cache, so runs compare as deployed systems); the judge is eval "
         "overhead and is shown on its own.",
         "",
