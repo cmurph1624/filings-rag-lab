@@ -22,7 +22,8 @@ from filings_rag.harness.prompts import get_judge_prompt, get_prompt
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
-from filings_rag.retrieve.factory import make_retriever
+from filings_rag.rerank.factory import make_reranker
+from filings_rag.retrieve.factory import make_retriever, resolve_spec
 from filings_rag.retrieve.scope import make_scoper
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -211,8 +212,14 @@ def run_cmd(
     with psycopg.connect(settings.database_url) as conn:
         table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
         corpus_ids = corpora.document_ids(conn, cfg.corpus, table)
+        rr = resolve_spec(cfg.retriever).get("rerank")
         retriever = make_retriever(
-            conn, cfg.retriever, table, make_embedder(embedder_name, dims, settings), corpus_ids
+            conn,
+            cfg.retriever,
+            table,
+            make_embedder(embedder_name, dims, settings),
+            corpus_ids,
+            make_reranker(rr["model"], settings) if rr else None,
         )
         scoper = make_scoper(conn, cfg.retriever.get("scope"), corpus_ids, CORPUS / "companies.csv")
         spec = cfg.backend_spec
@@ -246,7 +253,7 @@ def run_cmd(
         f" {s.embed_tokens:,} query-embedding\n"
         f"  API-equivalent cost: ${s.gen_cost + s.embed_cost + s.aux_cost:.4f}"
         f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f},"
-        f" scope model ${s.aux_cost:.4f});"
+        f" scope/rerank models ${s.aux_cost:.4f});"
         f" backend reported ${s.reported_cost:.4f}"
     )
     if s.paused:  # a clean stop, not a failure: exit 3 like `usage gate`

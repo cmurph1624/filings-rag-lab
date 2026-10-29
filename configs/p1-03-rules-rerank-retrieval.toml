@@ -1,0 +1,13 @@
+# Retrieval-only: rules scope (PR 3), vector top 50 within it, reranked by Voyage rerank-3.
+name = "p1-03-rules-rerank-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"

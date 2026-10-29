@@ -73,6 +73,13 @@ def embedding_cost(model: str, tokens: int, prices: dict[str, Any] | None = None
     return float(PER_TOKEN * tokens * table[model]["input"])
 
 
+def rerank_cost(model: str, tokens: int, prices: dict[str, Any] | None = None) -> float:
+    table = (prices or load_prices()).get("rerankers", {})
+    if model not in table:
+        raise KeyError(f"no price for reranker {model!r}; add it to config/prices.toml")
+    return float(PER_TOKEN * tokens * table[model]["input"])
+
+
 def plain_api_cost(model: str, usage: Usage, prices: dict[str, Any] | None = None) -> float:
     """What the same tokens cost as an ordinary API call with no prompt caching."""
     return model_cost(model, Usage(usage.prompt_tokens, usage.output_tokens), prices)

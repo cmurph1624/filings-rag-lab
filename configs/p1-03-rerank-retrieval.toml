@@ -1,0 +1,10 @@
+# Retrieval-only: vector top 50 on fb-distractors@1, reranked by Voyage rerank-3 to the top 10.
+name = "p1-03-rerank-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
