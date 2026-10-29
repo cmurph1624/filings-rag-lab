@@ -125,3 +125,12 @@ def test_bm25_postings_are_incremental_and_scored_by_the_formula(ids) -> None:  
     idf = math.log(1 + (5 - 1 + 0.5) / (1 + 0.5))
     want = idf * 1 * 2.2 / (1 + 1.2 * (1 - 0.75 + 0.75 * length / bm.avgdl))
     assert hits[0].score == pytest.approx(want)
+
+
+def test_bm25_on_a_table_without_postings_says_to_build(ids) -> None:  # type: ignore[no-untyped-def]
+    conn, docs = ids
+    conn.execute(f"DROP TABLE {TABLE}_lengths")
+    conn.commit()
+    with pytest.raises(ValueError, match="frl ingest build"):
+        BM25(conn, TABLE, docs)
+    assert conn.execute("SELECT 1").fetchone() == (1,)  # the connection is still usable

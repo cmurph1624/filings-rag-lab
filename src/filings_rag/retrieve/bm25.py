@@ -33,6 +33,8 @@ def ensure_postings(conn: psycopg.Connection[Any], table: str) -> int:
     """Create the BM25 tables if needed and add any chunks not yet indexed. Returns how many."""
     postings, lengths = postings_tables(table)
     t, p, ln = sql.Identifier(table), sql.Identifier(postings), sql.Identifier(lengths)
+    # Serialize builds of the same table; released at commit.
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (postings,))
     conn.execute(
         sql.SQL(
             """CREATE TABLE IF NOT EXISTS {p} (
@@ -110,16 +112,21 @@ class BM25:
         self.corpus = corpus
         self.k1 = k1
         self.b = b
-        row = conn.execute(
-            sql.SQL("SELECT count(*), avg(len) FROM {ln} WHERE document_id = ANY(%s)").format(
-                ln=sql.Identifier(self._lengths)
-            ),
-            (corpus,),
-        ).fetchone()
+        unbuilt = f"no BM25 postings for this corpus in {table}; run `frl ingest build`"
+        try:
+            row = conn.execute(
+                sql.SQL("SELECT count(*), avg(len) FROM {ln} WHERE document_id = ANY(%s)").format(
+                    ln=sql.Identifier(self._lengths)
+                ),
+                (corpus,),
+            ).fetchone()
+        except psycopg.errors.UndefinedTable as e:  # built before BM25 existed
+            conn.rollback()
+            raise ValueError(unbuilt) from e
         conn.commit()
         self.n = int(row[0]) if row else 0
         if self.n == 0:
-            raise ValueError(f"no BM25 postings for this corpus in {table}; run `frl ingest build`")
+            raise ValueError(unbuilt)
         self.avgdl = float(row[1]) if row and row[1] else 1.0
         self._df: dict[str, int] = {}
 
