@@ -79,7 +79,7 @@ def ensure_postings(conn: psycopg.Connection[Any], table: str) -> int:
 
 
 _QUERY = """
-SELECT p.chunk_id, d.doc_name, c.page, c.text,
+SELECT p.chunk_id, d.doc_name, c.page, c.text, c.section,
        sum(q.idf * p.tf * (%(k1)s + 1)
            / (p.tf + %(k1)s * (1 - %(b)s + %(b)s * l.len / %(avgdl)s))) AS score
 FROM unnest(%(lexemes)s::text[], %(idfs)s::float8[]) AS q(lexeme, idf)
@@ -88,7 +88,7 @@ JOIN {ln} l ON l.chunk_id = p.chunk_id
 JOIN {t} c ON c.id = p.chunk_id
 JOIN documents d ON d.id = p.document_id
 WHERE p.document_id = ANY(%(docs)s)
-GROUP BY p.chunk_id, d.doc_name, c.page, c.text
+GROUP BY p.chunk_id, d.doc_name, c.page, c.text, c.section
 ORDER BY score DESC, p.chunk_id
 LIMIT %(k)s
 """
@@ -175,4 +175,7 @@ class BM25:
                     "k": k,
                 },
             ).fetchall()
-        return [Hit(cid, doc, page, float(score), body) for cid, doc, page, body, score in rows]
+        return [
+            Hit(cid, doc, page, float(score), body, section)
+            for cid, doc, page, body, section, score in rows
+        ]

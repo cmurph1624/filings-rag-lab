@@ -51,6 +51,7 @@ def register(conn: psycopg.Connection[Any], p: IngestPipeline, e: Embedder) -> s
                 char_end    int  NOT NULL,
                 page        int  NOT NULL,
                 text        text NOT NULL,
+                section     text,
                 embedding   vector({dims}) NOT NULL,
                 tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
                 UNIQUE (document_id, ord)
@@ -74,7 +75,7 @@ def build(
     stats = BuildStats()
     rows = conn.execute(
         sql.SQL(
-            """SELECT d.id, d.doc_name, d.body, d.page_offsets FROM documents d
+            """SELECT d.id, d.doc_name, d.company, d.body, d.page_offsets FROM documents d
                WHERE d.extractor = %s AND (%s::text[] IS NULL OR d.doc_name = ANY(%s))
                  AND NOT EXISTS (SELECT 1 FROM {t} c WHERE c.document_id = d.id)
                ORDER BY d.id"""
@@ -82,8 +83,9 @@ def build(
         (EXTRACTOR, docs, docs),
     ).fetchall()
     conn.commit()  # close the read's implicit transaction so each document commits on its own
-    for doc_id, doc_name, body, pages in rows:
-        chunks = p.chunk(Doc(doc_id, body, list(pages)))
+    for doc_id, doc_name, company, body, pages in rows:
+        meta = {"doc_name": doc_name, "company": company}
+        chunks = p.chunk(Doc(doc_id, body, list(pages), meta))
         if not chunks:  # nothing to embed; would otherwise be retried on every run
             stats.empty += 1
             log(f"  {doc_name:40} no text, skipped")
@@ -101,10 +103,19 @@ def build(
             cur.executemany(
                 sql.SQL(
                     "INSERT INTO {t} (document_id, ord, char_start, char_end, page, text,"
-                    " embedding) VALUES (%s, %s, %s, %s, %s, %s, %s::vector)"
+                    " section, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)"
                 ).format(t=t),
                 [
-                    (doc_id, c.ord, c.char_start, c.char_end, c.page, c.text, to_pgvector(v))
+                    (
+                        doc_id,
+                        c.ord,
+                        c.char_start,
+                        c.char_end,
+                        c.page,
+                        c.text,
+                        c.section,
+                        to_pgvector(v),
+                    )  # fmt: skip
                     for c, v in zip(chunks, out.vectors, strict=True)
                 ],
             )

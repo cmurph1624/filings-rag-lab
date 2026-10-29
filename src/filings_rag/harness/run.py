@@ -197,7 +197,13 @@ def execute(
             except KeyError as e:
                 error = error or str(e)
         retrieved = [
-            {"chunk_id": h.chunk_id, "doc_name": h.doc_name, "page": h.page, "score": h.score}
+            {
+                "chunk_id": h.chunk_id,
+                "doc_name": h.doc_name,
+                "page": h.page,
+                "score": h.score,
+                "section": h.section,
+            }  # fmt: skip
             for h in (job.retrieval.hits if job else [])
         ]
         scope = job.scope if job else None

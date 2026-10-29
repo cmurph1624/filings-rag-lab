@@ -3,6 +3,7 @@
 tests/test_harness.py pins a hash of each prompt so an in-place edit fails the build.
 """
 
+import re
 from dataclasses import dataclass
 
 from filings_rag.retrieve.base import Hit
@@ -12,11 +13,17 @@ from filings_rag.retrieve.base import Hit
 class Prompt:
     system: str
     template: str  # {excerpts}, {question}
-    excerpt: str  # {n}, {doc_name}, {page}, {text}
+    excerpt: str  # {n}, {doc_name}, {page}, {text}, {section} ("" or " · <section>")
 
     def render(self, question: str, hits: list[Hit]) -> str:
         excerpts = "\n\n".join(
-            self.excerpt.format(n=i, doc_name=h.doc_name, page=h.page, text=h.text)
+            self.excerpt.format(
+                n=i,
+                doc_name=h.doc_name,
+                page=h.page,
+                text=h.text,
+                section=f" · {h.section}" if h.section else "",
+            )
             for i, h in enumerate(hits, 1)
         )
         return self.template.format(excerpts=excerpts, question=question)
@@ -34,7 +41,36 @@ ANSWER_V1 = Prompt(
     excerpt="[{n}] {doc_name}, page {page}\n{text}",
 )
 
-PROMPTS: dict[str, Prompt] = {"answer@1": ANSWER_V1}
+# answer@1 plus citations: the answer names the excerpts it used, so the report can measure
+# whether they hold the labelled evidence (citation precision).
+ANSWER_V2 = Prompt(
+    system=(
+        "You answer questions about companies' SEC filings using only the numbered excerpts "
+        "you are given. If the question needs a calculation, show it briefly. State the answer "
+        "with its units and the fiscal period it refers to. Cite the excerpts you used by "
+        "number in square brackets, such as [2] or [1][4], right after the statement they "
+        "support. If the excerpts do not contain what the question needs, say you cannot "
+        "answer from the excerpts; do not guess or use outside knowledge. Keep the answer "
+        "under 150 words."
+    ),
+    template="Excerpts:\n\n{excerpts}\n\nQuestion: {question}",
+    excerpt="[{n}] {doc_name}{section}, page {page}\n{text}",
+)
+
+PROMPTS: dict[str, Prompt] = {"answer@1": ANSWER_V1, "answer@2": ANSWER_V2}
+
+CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def citations(answer: str, n_excerpts: int) -> list[int]:
+    """Excerpt numbers an answer cites ("[2]", "[1][4]", "[1, 3]"), in order, de-duplicated."""
+    seen: list[int] = []
+    for m in CITATION.finditer(answer):
+        for part in m[1].split(","):
+            k = int(part)
+            if 1 <= k <= n_excerpts and k not in seen:
+                seen.append(k)
+    return seen
 
 
 def get_prompt(ref: str) -> Prompt:

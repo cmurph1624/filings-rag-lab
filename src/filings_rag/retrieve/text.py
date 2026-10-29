@@ -28,7 +28,7 @@ _TS_RANK_CD = """
 WITH q AS (
     SELECT replace(plainto_tsquery('english', %(text)s)::text, '&', '|')::tsquery AS query
 )
-SELECT c.id, d.doc_name, c.page, c.text, ts_rank_cd(c.tsv, q.query) AS score
+SELECT c.id, d.doc_name, c.page, c.text, ts_rank_cd(c.tsv, q.query) AS score, c.section
 FROM {t} c CROSS JOIN q
 JOIN documents d ON d.id = c.document_id
 WHERE c.tsv @@ q.query {docs}
@@ -71,7 +71,10 @@ class TextRetriever:
                 sql.SQL(_TS_RANK_CD).format(t=sql.Identifier(self._table), docs=filt),
                 {"text": text, "k": self.k, "docs": docs},
             ).fetchall()
-        return [Hit(cid, doc, page, float(score), body) for cid, doc, page, body, score in rows]
+        return [
+            Hit(cid, doc, page, float(score), body, section)
+            for cid, doc, page, body, score, section in rows
+        ]
 
     def query(self, text: str, documents: list[int] | None = None) -> list[Hit]:
         if self._bm25 is not None:

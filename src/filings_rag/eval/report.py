@@ -9,6 +9,8 @@ import psycopg
 
 from filings_rag.eval import retrieval as rmetrics
 from filings_rag.harness.config import from_dict
+from filings_rag.harness.prompts import citations
+from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, batch_api_cost, load_prices, plain_api_cost
 from filings_rag.retrieve.factory import resolve_spec
 
@@ -43,6 +45,9 @@ class RunSummary:
     aux_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
     component_cost: dict[str, float] = field(default_factory=dict)  # plain API, by component
     scopes: list[tuple[bool, str, int]] = field(default_factory=list)  # gold in, level, filings
+    citing: int = 0  # answers that cite at least one excerpt
+    cited: int = 0  # cited excerpts, over questions with labelled evidence
+    cited_labelled: int = 0  # of those, excerpts that hold labelled evidence
     retrieve_s: list[float] = field(default_factory=list)
     generate_s: list[float] = field(default_factory=list)
 
@@ -74,6 +79,22 @@ def _add(into: dict[str, float], more: dict[str, float]) -> None:
 _TOKENS = (
     "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens"
 )
+
+
+def citation_counts(
+    answers: list[tuple[str, str, list[dict[str, Any]]]], labelled: dict[str, set[int]]
+) -> tuple[int, int, int]:
+    """(answers citing an excerpt, cited excerpts over labelled questions, of those labelled).
+
+    `answers`: (question_id, answer, retrieved hits in rank order) per answered question."""
+    citing = cited = good = 0
+    for qid, answer, retrieved in answers:
+        ks = citations(answer, len(retrieved))
+        citing += bool(ks)
+        if qid in labelled:
+            cited += len(ks)
+            good += sum(retrieved[k - 1]["chunk_id"] in labelled[qid] for k in ks)
+    return citing, cited, good
 
 
 def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
@@ -158,6 +179,22 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         if scope is not None:
             level = scope["level"]
             s.scopes.append((level == "corpus" or gold in scope["docs"], level, len(scope["docs"])))
+    if generated:
+        p = get_pipeline(cfg.pipeline)
+        labelled: dict[str, set[int]] = {}
+        for qid, cid in conn.execute(
+            "SELECT l.question_id, l.chunk_id FROM evidence_labels l"
+            " JOIN run_questions r ON r.question_id = l.question_id AND r.run_id = %s"
+            " WHERE l.pipeline = %s AND l.version = %s",
+            (run_id, p.name, p.version),
+        ):
+            labelled.setdefault(qid, set()).add(cid)
+        answers = conn.execute(
+            "SELECT question_id, answer, retrieved FROM run_questions"
+            " WHERE run_id = %s AND error IS NULL AND answer IS NOT NULL",
+            (run_id,),
+        ).fetchall()
+        s.citing, s.cited, s.cited_labelled = citation_counts(answers, labelled)
     s.retrieval, s.unlabelled = rmetrics.load(conn, run_id, cfg.pipeline)
     conn.commit()
     return s
@@ -261,8 +298,18 @@ def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
                 ("incorrect", _gen(lambda s: str(s.verdicts["incorrect"]))),
                 ("refused", _gen(lambda s: str(s.verdicts["refused"]))),
                 ("not judged", _gen(lambda s: str(s.total - sum(s.verdicts.values())))),
+                ("answers citing excerpts", _gen(lambda s: _pct(s.citing, s.answered))),
+                (
+                    "citation precision",
+                    _gen(lambda s: _pct(s.cited_labelled, s.cited) if s.cited else "–"),
+                ),
             ),
         ),
+        "",
+        "*Citation precision*: the share of excerpts cited in answers (prompts that ask for "
+        "citations, e.g. answer@2) that hold the question's labelled evidence, over questions "
+        "with labels. Like recall it is a proxy: an excerpt that repeats the figure also counts "
+        "as useful to the model but not here.",
         "",
         "By question type:",
         "",

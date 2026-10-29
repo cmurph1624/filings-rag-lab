@@ -15,8 +15,8 @@ from filings_rag.embed.base import Embedder, to_pgvector
 from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
 
 _QUERY = """
-SELECT c.id, d.doc_name, c.page, c.text, 1 - c.dist AS score
-FROM (SELECT id, document_id, page, text, embedding <=> %(q)s::vector AS dist
+SELECT c.id, d.doc_name, c.page, c.text, 1 - c.dist AS score, c.section
+FROM (SELECT id, document_id, page, text, section, embedding <=> %(q)s::vector AS dist
       FROM {t} {where} ORDER BY embedding <=> %(q)s::vector LIMIT %(k)s) c
 JOIN documents d ON d.id = c.document_id
 ORDER BY c.dist, c.id
@@ -69,7 +69,10 @@ class VectorRetriever:
                 sql.SQL(_QUERY).format(t=self._table, where=where),
                 {"q": to_pgvector(vector), "k": self.k, "docs": docs},
             ).fetchall()
-        return [Hit(cid, doc, page, float(score), text) for cid, doc, page, text, score in rows]
+        return [
+            Hit(cid, doc, page, float(score), text, section)
+            for cid, doc, page, text, score, section in rows
+        ]
 
     def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
         """`documents` replaces the corpus filter for this query (a scope within the corpus)."""

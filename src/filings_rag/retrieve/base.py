@@ -11,6 +11,7 @@ class Hit:
     page: int
     score: float
     text: str
+    section: str | None = None  # the chunk's section, for pipelines that record one
 
 
 @dataclass(frozen=True)
