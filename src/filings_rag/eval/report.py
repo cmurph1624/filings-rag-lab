@@ -238,8 +238,10 @@ def render(runs: list[RunSummary]) -> str:
         "",
         f"USD at list prices (`config/prices.toml`, as of {load_prices()['as_of']}), whoever "
         "paid. *As recorded* prices the tokens the backend actually used: `claude -p` writes "
-        "every prompt to the 1-hour cache at 2× input. *Plain API* is the same tokens as an "
-        "uncached API call; *Batch API* is that at the batch discount. Answering cost is "
+        "each new prompt to the 1-hour cache at 2× input and reads repeats from it, so this "
+        "figure depends on what earlier runs left in the cache. *Plain API* is the same tokens "
+        "as an uncached API call and *Batch API* is that at the batch discount; these two are "
+        "comparable across runs and backends. Answering cost is "
         "generation plus query embedding; the judge is eval overhead and is shown on its own.",
         "",
     ]
