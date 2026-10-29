@@ -1,0 +1,9 @@
+# Retrieval-only: p1-00 (fb-distractors@1) with lexical search alone (Okapi BM25 over tsv lexemes).
+name = "p1-02-text-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "text"
+k = 10

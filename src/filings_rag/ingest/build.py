@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from filings_rag.embed.base import Embedder, to_pgvector
 from filings_rag.extract.html import EXTRACTOR
 from filings_rag.ingest.base import Doc, IngestPipeline, chunk_table
+from filings_rag.retrieve.bm25 import ensure_postings
 
 
 @dataclass
@@ -122,4 +123,7 @@ def build(
         )
     )
     conn.commit()
+    added = ensure_postings(conn, table)  # BM25 term statistics for the new chunks
+    if added:
+        log(f"  bm25: indexed {added:,} chunks")
     return stats
