@@ -129,7 +129,10 @@ class Structured(TablePreserving):
         head_at = [o for o, _ in headings]
         company = doc.meta.get("company") or ""
         doc_name = doc.meta.get("doc_name")
-        form, period = period_label(doc_name) if doc_name else ("", "")
+        try:
+            form, period = period_label(doc_name) if doc_name else ("", "")
+        except ValueError:  # not a FinanceBench-style name: header without form and period
+            form, period = "", ""
         out = []
         for c in base:
             i = bisect_right(item_at, c.char_start) - 1

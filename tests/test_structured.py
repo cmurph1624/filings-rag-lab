@@ -60,7 +60,6 @@ def test_chunks_are_table_preserving_plus_a_header_and_exhibit_breaks() -> None:
 
 
 def test_headers_and_sections() -> None:
-    by_text = {c.text.split("\n", 1)[1].split("\n")[0]: c for c in _chunks()}
     mdna = next(c for c in _chunks() if "word0" in c.text and "Liquidity" in c.text)
     assert mdna.text.split("\n")[0] == (
         "Best Buy · 10-K · FY2019 · Item 7. Management's Discussion and Analysis of Financial "
@@ -77,7 +76,7 @@ def test_headers_and_sections() -> None:
     )
     exhibit = [c for c in _chunks() if c.section and c.section.startswith("EX-99.1")]
     assert exhibit and exhibit[-1].text.startswith("Best Buy · 10-K · FY2019 · EX-99.1")
-    assert by_text  # every chunk has a header line
+    assert all(c.text.split("\n")[0].startswith("Best Buy · 10-K · FY2019") for c in _chunks())
 
 
 def test_period_labels() -> None:
@@ -111,3 +110,9 @@ def test_citation_counts() -> None:
         ("q3", "I cannot answer from the excerpts.", hits),
     ]
     assert citation_counts(answers, {"q1": {10}, "q3": {11}}) == (2, 2, 1)
+
+
+def test_a_name_that_isnt_financebench_style_still_gets_a_header() -> None:
+    chunks = Structured().chunk(Doc(1, BODY, [0], {"doc_name": "odd-name", "company": "Best Buy"}))
+    assert chunks and all(c.text.startswith("Best Buy") for c in chunks)
+    assert "10-K" not in chunks[1].text.split("\n")[0]
