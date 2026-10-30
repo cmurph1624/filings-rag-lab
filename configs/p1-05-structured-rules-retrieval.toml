@@ -1,0 +1,12 @@
+# Retrieval-only: structured@1 with the rules scope.
+name = "p1-05-structured-rules-retrieval"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+
+[retriever.scope]
+mode = "rules"
