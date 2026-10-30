@@ -6,6 +6,7 @@ the two sides' incomparable scores (cosine similarity, ts_rank_cd) never need ca
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
 from filings_rag.retrieve.text import TextRetriever
@@ -21,9 +22,7 @@ def rrf(lists: Sequence[Sequence[Hit]], k: int, rrf_k: int = 60) -> list[Hit]:
             scores[h.chunk_id] = scores.get(h.chunk_id, 0.0) + 1.0 / (rrf_k + rank)
             first.setdefault(h.chunk_id, h)
     best = sorted(scores, key=lambda cid: (-scores[cid], cid))[:k]
-    return [
-        Hit(cid, first[cid].doc_name, first[cid].page, scores[cid], first[cid].text) for cid in best
-    ]
+    return [replace(first[cid], score=scores[cid]) for cid in best]
 
 
 class HybridRetriever:

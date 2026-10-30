@@ -1,0 +1,28 @@
+# Full run: structured@1, rules scope, vector top 50 reranked by rerank-3, answer@2 (cites
+# excerpts, so the report measures citation precision). Candidate for the PR 8 ladder.
+name = "p1-05-structured-rules-rerank-cite"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+
+[generation]
+backend = "claude-cli"
+model = "claude-sonnet-5-5"
+prompt = "answer@2"
+
+[judge]  # stronger than the generator, pinned per run
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5

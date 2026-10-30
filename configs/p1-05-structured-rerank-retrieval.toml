@@ -1,0 +1,10 @@
+# Retrieval-only: structured@1, vector top 50 reranked by rerank-3 (no scope).
+name = "p1-05-structured-rerank-retrieval"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }

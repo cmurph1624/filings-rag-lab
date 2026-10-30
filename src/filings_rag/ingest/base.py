@@ -1,6 +1,6 @@
 """Ingest pipelines: named, versioned chunking strategies that each build their own index."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -9,6 +9,9 @@ class Doc:
     id: int
     body: str
     page_offsets: list[int]
+    # Filing metadata for pipelines that use it (structured@1's context headers):
+    # doc_name, company.
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -17,7 +20,8 @@ class Chunk:
     char_start: int
     char_end: int
     page: int  # 1-based page where the chunk starts
-    text: str
+    text: str  # what is embedded and shown to the model
+    section: str | None = None  # e.g. "Item 8. Financial Statements … › Balance Sheets"
 
 
 class IngestPipeline(Protocol):

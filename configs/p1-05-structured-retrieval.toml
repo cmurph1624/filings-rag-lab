@@ -1,0 +1,9 @@
+# Retrieval-only: structured@1 (context headers), vector top 10 on fb-distractors@1.
+name = "p1-05-structured-retrieval"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10

@@ -10,7 +10,7 @@ from filings_rag.retrieve.factory import make_retriever
 
 ROOT = Path(__file__).resolve().parents[1]
 # Prompts are versioned: editing one in place changes results under the same name.
-PINNED = {"answer@1": "6def313c45d7a981"}
+PINNED = {"answer@1": "6def313c45d7a981", "answer@2": "bb30e8c3aa0ce6e2"}
 PINNED_JUDGE = {"judge@1": "d22124b2220d1927"}
 
 
