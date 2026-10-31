@@ -78,7 +78,7 @@ numbers `answer@1` answers mention unprompted, so it isn't comparable to run 616
 ## Retrieval-only grid
 
 All runs are on `fb-distractors@1` and make no model calls apart from reranking and the `llm`
-scope. This is the full set of retrieval-only runs from PRs 2–7.
+scope. This is the full set of retrieval-only runs from PRs 2–7, plus run 639 (oracle + rerank-3, added after PR 8).
 
 | pipeline | retriever | scope | rerank | run | recall@1 | recall@10 | MRR |
 |---|---|---|---|---|---|---|---|
@@ -89,6 +89,7 @@ scope. This is the full set of retrieval-only runs from PRs 2–7.
 | naive-fixed@1 | vector | none | rerank-3 | 389 | 0.403 | 0.714 | 0.555 |
 | naive-fixed@1 | vector | rules | rerank-3 | 390 | 0.470 | **0.815** | 0.644 |
 | naive-fixed@1 | vector | rules | rerank-3-lite | 391 | 0.440 | 0.809 | 0.615 |
+| naive-fixed@1 | vector | oracle (upper bound) | rerank-3 | 639 | 0.534 | 0.903 | 0.730 |
 | naive-fixed@1 | BM25 text | none | – | 316 | 0.074 | 0.117 | 0.086 |
 | naive-fixed@1 | hybrid RRF | none | – | 317 | 0.107 | 0.369 | 0.187 |
 | naive-fixed@1 | hybrid RRF | rules | – | 318 | 0.168 | 0.511 | 0.285 |
@@ -110,8 +111,9 @@ What the grid shows:
   $0.23 per 150 questions). Either is a rounding error next to generation.
 - **The oracle scope (gold filing only) is an upper bound, not a result.** Without a reranker it
   reaches 0.774, below rules + rerank (0.815), so the reranker adds more than perfect filing
-  selection does. Where the remaining gap sits is untested until there is an oracle + rerank-3
-  run, which is a cheap P2 follow-up.
+  selection does. With the reranker (run 639) it reaches 0.903. So rules scope still leaves about
+  0.09 recall@10 to filing selection, for example 00494, 00651 and 02416, whose year doesn't map
+  one-to-one to a filing (see [`p1-misses.md`](p1-misses.md)).
 - **The `llm` scope is about the same as rules** (0.677 vs 0.663, gold in scope 149 vs 147) at
   $0.023 per 150 questions. Rules stayed on the ladder because they cost nothing and keep the
   ladder deterministic.
@@ -126,8 +128,8 @@ configs but highest on accuracy.
   domain-relevant (76%), with metrics-generated highest (94%).
 - **Evidence still not retrieved:** 16.8% of questions have no labelled evidence passage in the
   top 10 (hit@10 0.832).
-- **Hand-assigned failure buckets** like P0's are not redone here. That is the first P2 task,
-  before choosing what P2 changes.
+- **Hand-assigned failure buckets** are in [`p1-misses.md`](p1-misses.md): 11 retrieval, 8
+  scoping and 10 generation or eval misses.
 
 ## Notes on method
 

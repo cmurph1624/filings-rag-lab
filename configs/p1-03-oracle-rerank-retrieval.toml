@@ -1,0 +1,14 @@
+# Retrieval-only: oracle scope (gold filing only) + rerank-3 over 50. Upper bound, never a
+# headline number. Answers where the gap sits after rules + rerank (run 390, recall@10 0.815).
+name = "p1-03-oracle-rerank-retrieval"
+pipeline = "naive-fixed@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "oracle"
