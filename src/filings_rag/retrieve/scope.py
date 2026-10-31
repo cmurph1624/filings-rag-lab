@@ -14,6 +14,18 @@ Mentions select filings by their label, the year and period in the FinanceBench-
 A quarter's year counts as a mentioned year too. If nothing matches, the scope falls back to
 all of the company's filings; with no company found, to the whole corpus. The level reached
 is recorded, so the fallback rate can be reported.
+
+Period options (P2; each is left out of the resolved spec at its default, so configs that don't
+set it keep their hashes and their behaviour):
+- `forecast_lookback = n`: a forward-looking question ("expected", "forecast", "guidance",
+  "outlook"...) also matches annual filings up to n years before each year it names, because a
+  forecast for FY2023 is made in the FY2022 filing.
+- `no_year = "latest"`: a question that names no period gets the company's filings from its
+  latest labelled year, instead of all of them (`"company"`, the default).
+- `fiscal_labels = "financebench"`: distractor filings (not FinanceBench's own documents) are
+  relabelled with the company's `label_offset` from companies.csv. FinanceBench labels Ulta's
+  years one ahead of the company's own (its FY2023 is Ulta's fiscal 2022), so Ulta's distractors
+  get +1 to match the labels the questions use. FinanceBench's documents keep their labels.
 """
 
 import csv
@@ -47,8 +59,17 @@ ORDINAL = re.compile(
     r"(?:fiscal\s+(?:year\s+)?|FY\s*)?" + _Y4,
     re.IGNORECASE,
 )
+FORWARD = re.compile(
+    r"\b(?:expect(?:s|ed|ing|ation|ations)?|forecast\w*|guidance|outlook|anticipat\w*"
+    r"|projected|projections?)\b",
+    re.IGNORECASE,
+)
 HALF = re.compile(r"\bH([12])\s*(?:of\s+)?(?:FY\s*)?" + _Y4, re.IGNORECASE)
 ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+
+
+def is_forward_looking(text: str) -> bool:
+    return FORWARD.search(text) is not None
 
 
 def _year(s: str) -> int:
@@ -82,6 +103,7 @@ class Company:
     name: str
     ticker: str
     aliases: tuple[str, ...]
+    label_offset: int = 0  # FinanceBench's fiscal-year label minus the company's own
 
 
 def company_patterns(companies: Iterable[Company]) -> list[tuple[str, re.Pattern[str]]]:
@@ -150,22 +172,33 @@ class DocLabel:
     period: str  # FY | Q1..Q4
 
     @classmethod
-    def from_doc_name(cls, doc_id: int, doc_name: str, company: str) -> "DocLabel":
+    def from_doc_name(cls, doc_id: int, doc_name: str, company: str, offset: int = 0) -> "DocLabel":
         ref = parse_doc_name(doc_name)
-        return cls(doc_id, doc_name, company, ref.fiscal_year, ref.fiscal_period)
+        return cls(doc_id, doc_name, company, ref.fiscal_year + offset, ref.fiscal_period)
 
-    def matches(self, m: Mentions, lookahead: int) -> bool:
+    def matches(self, m: Mentions, lookahead: int, lookback: int = 0) -> bool:
         if self.period in ANNUAL:
-            return any(y <= self.year <= y + lookahead for y in m.years)
+            return any(y - lookback <= self.year <= y + lookahead for y in m.years)
         return (self.year, int(self.period[1])) in m.quarters
 
 
-def select(labels: list[DocLabel], m: Mentions, lookahead: int) -> tuple[list[DocLabel], str]:
-    """(filings in scope, level): level is "filings", "company" (fallback) or "corpus"."""
+def select(
+    labels: list[DocLabel],
+    m: Mentions,
+    lookahead: int,
+    *,
+    lookback: int = 0,
+    no_year: str = "company",
+) -> tuple[list[DocLabel], str]:
+    """(filings in scope, level): level is "filings", "latest" (no period named, latest year),
+    "company" (fallback) or "corpus"."""
     own = [d for d in labels if d.company == m.company]
     if not own:
         return labels, "corpus"
-    hit = [d for d in own if d.matches(m, lookahead)]
+    if no_year == "latest" and not m.years and not m.quarters:
+        top = max(d.year for d in own)
+        return [d for d in own if d.year == top], "latest"
+    hit = [d for d in own if d.matches(m, lookahead, lookback)]
     return (hit, "filings") if hit else (own, "company")
 
 
@@ -184,6 +217,17 @@ SCOPE_DEFAULTS: dict[str, dict[str, Any]] = {
         "prompt": "scope@1",
     },
 }
+# P2 period options for rules and llm, with the value that means "off". They are only in the
+# resolved spec when set to something else, so older configs keep their hashes.
+PERIOD_OPTIONS: dict[str, Any] = {
+    "forecast_lookback": 0,
+    "no_year": "company",
+    "fiscal_labels": "doc_name",
+}
+PERIOD_CHOICES: dict[str, tuple[str, ...]] = {
+    "no_year": ("company", "latest"),
+    "fiscal_labels": ("doc_name", "financebench"),
+}
 
 
 def resolve_scope(spec: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -194,14 +238,21 @@ def resolve_scope(spec: dict[str, Any] | None) -> dict[str, Any] | None:
     if mode not in SCOPE_DEFAULTS:
         raise ValueError(f"unknown scope mode {mode!r}; known: {list(SCOPE_DEFAULTS)}")
     opts = {k: v for k, v in spec.items() if k != "mode"}
-    unknown = opts.keys() - SCOPE_DEFAULTS[mode].keys()
+    allowed = SCOPE_DEFAULTS[mode].keys() | (
+        PERIOD_OPTIONS.keys() if mode in ("rules", "llm") else set()
+    )
+    unknown = opts.keys() - allowed
     if unknown:
         raise ValueError(f"unknown {mode} scope options: {sorted(unknown)}")
     if mode == "none":
         return None
+    for k, choices in PERIOD_CHOICES.items():
+        if k in opts and opts[k] not in choices:
+            raise ValueError(f"scope {k} must be one of {list(choices)}, not {opts[k]!r}")
+    opts = {k: v for k, v in opts.items() if PERIOD_OPTIONS.get(k, object()) != v}
     resolved = {"mode": mode, **(SCOPE_DEFAULTS[mode] | opts)}
-    if resolved.get("lookahead", 0) < 0:
-        raise ValueError("scope lookahead must be 0 or more")
+    if resolved.get("lookahead", 0) < 0 or resolved.get("forecast_lookback", 0) < 0:
+        raise ValueError("scope lookahead and forecast_lookback must be 0 or more")
     if mode == "llm":
         get_scope_prompt(resolved["prompt"])
     return resolved
@@ -313,8 +364,17 @@ class Scoper:
                 m, aux = self._llm(question_id, question)
             else:
                 m = rules_mentions(question, self._patterns)
-            docs, level = select(self._labels, m, self.spec.get("lookahead", 0))
+            forward = bool(self.spec.get("forecast_lookback")) and is_forward_looking(question)
+            docs, level = select(
+                self._labels,
+                m,
+                self.spec.get("lookahead", 0),
+                lookback=self.spec.get("forecast_lookback", 0) if forward else 0,
+                no_year=self.spec.get("no_year", "company"),
+            )
             mentions = m.to_json()
+            if forward:
+                mentions["forward"] = True
         record = {"mode": self.mode, **mentions, "level": level}
         if aux and aux.get("parse_error"):
             record["parse_error"] = aux["parse_error"]
@@ -364,7 +424,12 @@ def read_companies(path: Path) -> tuple[list[Company], dict[int, str]]:
     with path.open() as fh:
         rows = list(csv.DictReader(fh))
     companies = [
-        Company(r["company"], r["ticker"], tuple(a for a in r.get("aliases", "").split(";") if a))
+        Company(
+            r["company"],
+            r["ticker"],
+            tuple(a for a in r.get("aliases", "").split(";") if a),
+            int(r.get("label_offset") or 0),
+        )
         for r in rows
     ]
     return companies, {int(r["cik"]): r["company"] for r in rows}
@@ -388,7 +453,18 @@ def make_scoper(
     unknown = sorted({cik for _, _, cik in rows} - by_cik.keys())
     if unknown:
         raise ValueError(f"CIKs {unknown} are not in {companies_csv.name}")
-    labels = [DocLabel.from_doc_name(i, n, by_cik[cik]) for i, n, cik in rows]
+    offsets: dict[str, int] = {}
+    benchmark_docs: set[str] = set()
+    if resolved.get("fiscal_labels") == "financebench":
+        offsets = {c.name: c.label_offset for c in companies}
+        benchmark_docs = {r[0] for r in conn.execute("SELECT doc_name FROM benchmark_docs")}
+        conn.commit()
+    labels = [
+        DocLabel.from_doc_name(
+            i, n, by_cik[cik], 0 if n in benchmark_docs else offsets.get(by_cik[cik], 0)
+        )
+        for i, n, cik in rows
+    ]
     backend = None
     if resolved["mode"] == "llm":
         backend = make_backend({"backend": resolved["backend"], "model": resolved["model"]})

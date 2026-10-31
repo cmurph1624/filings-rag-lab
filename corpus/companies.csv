@@ -1,33 +1,33 @@
-company,ticker,cik,aliases
-3M,MMM,66740,
-AES Corporation,AES,874761,AES
-AMD,AMD,2488,
-Activision Blizzard,ATVI,718877,Activision
-Adobe,ADBE,796343,
-Amazon,AMZN,1018724,
-Amcor,AMCR,1748790,
-American Express,AXP,4962,AmEx;Amex
-American Water Works,AWK,1410636,American Water
-Best Buy,BBY,764478,
-Block,XYZ,1512673,Square
-Boeing,BA,12927,
-CVS Health,CVS,64803,CVS
-Coca-Cola,KO,21344,Coca Cola;CocaCola;Coke
-Corning,GLW,24741,
-Costco,COST,909832,
-Foot Locker,FL,850209,Footlocker
-General Mills,GIS,40704,
-JPMorgan,JPM,19617,JPM;J.P. Morgan;JP Morgan;JPMorgan Chase
-Johnson & Johnson,JNJ,200406,JnJ;J&J;Johnson and Johnson
-Kraft Heinz,KHC,1637459,Kraft
-Lockheed Martin,LMT,936468,Lockheed
-MGM Resorts,MGM,789570,MGM
-Microsoft,MSFT,789019,
-Netflix,NFLX,1065280,
-Nike,NKE,320187,
-Paypal,PYPL,1633917,PayPal
-PepsiCo,PEP,77476,Pepsi
-Pfizer,PFE,78003,
-Ulta Beauty,ULTA,1403568,Ulta
-Verizon,VZ,732712,
-Walmart,WMT,104169,Wal-Mart
+company,ticker,cik,aliases,label_offset
+3M,MMM,66740,,
+AES Corporation,AES,874761,AES,
+AMD,AMD,2488,,
+Activision Blizzard,ATVI,718877,Activision,
+Adobe,ADBE,796343,,
+Amazon,AMZN,1018724,,
+Amcor,AMCR,1748790,,
+American Express,AXP,4962,AmEx;Amex,
+American Water Works,AWK,1410636,American Water,
+Best Buy,BBY,764478,,
+Block,XYZ,1512673,Square,
+Boeing,BA,12927,,
+CVS Health,CVS,64803,CVS,
+Coca-Cola,KO,21344,Coca Cola;CocaCola;Coke,
+Corning,GLW,24741,,
+Costco,COST,909832,,
+Foot Locker,FL,850209,Footlocker,
+General Mills,GIS,40704,,
+JPMorgan,JPM,19617,JPM;J.P. Morgan;JP Morgan;JPMorgan Chase,
+Johnson & Johnson,JNJ,200406,JnJ;J&J;Johnson and Johnson,
+Kraft Heinz,KHC,1637459,Kraft,
+Lockheed Martin,LMT,936468,Lockheed,
+MGM Resorts,MGM,789570,MGM,
+Microsoft,MSFT,789019,,
+Netflix,NFLX,1065280,,
+Nike,NKE,320187,,
+Paypal,PYPL,1633917,PayPal,
+PepsiCo,PEP,77476,Pepsi,
+Pfizer,PFE,78003,,
+Ulta Beauty,ULTA,1403568,Ulta,1
+Verizon,VZ,732712,,
+Walmart,WMT,104169,Wal-Mart,

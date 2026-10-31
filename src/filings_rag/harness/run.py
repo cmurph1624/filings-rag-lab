@@ -160,6 +160,19 @@ def pending_questions(
     return todo, len(rows) - len(todo)
 
 
+def document_periods(conn: psycopg.Connection[Any]) -> dict[str, str]:
+    """doc_name -> the period a 10-K or 10-Q covers, for prompts that show it. 8-Ks (earnings
+    releases and events) are left out: their stored period end is the report date."""
+    phrase = {"10-K": "fiscal year ended", "10-Q": "quarter ended"}
+    return {
+        name: f"{phrase[form]} {end.isoformat()}"
+        for name, form, end in conn.execute(
+            "SELECT doc_name, form_type, period_end FROM documents"
+            " WHERE form_type IN ('10-K', '10-Q') AND period_end IS NOT NULL"
+        )
+    }
+
+
 def execute(
     conn: psycopg.Connection[Any],
     run_id: int,
@@ -174,6 +187,7 @@ def execute(
     log: Log = print,
 ) -> RunStats:
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
+    periods = document_periods(conn) if prompt is not None and prompt.uses_periods else None
     conn.commit()
     stats = RunStats(run_id, skipped=skipped)
     concurrency = max(1, cfg.execution["concurrency"])
@@ -306,7 +320,7 @@ def execute(
                 record(job, qid, None, None)
                 continue
             fut = pool.submit(
-                backend.generate, prompt.system, prompt.render(question, retrieval.hits)
+                backend.generate, prompt.system, prompt.render(question, retrieval.hits, periods)
             )
             in_flight[fut] = job
             while len(in_flight) >= concurrency:

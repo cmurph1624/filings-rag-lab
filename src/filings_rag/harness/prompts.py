@@ -13,9 +13,16 @@ from filings_rag.retrieve.base import Hit
 class Prompt:
     system: str
     template: str  # {excerpts}, {question}
-    excerpt: str  # {n}, {doc_name}, {page}, {text}, {section} ("" or " · <section>")
+    excerpt: str  # {n}, {doc_name}, {page}, {text}, {section} ("" or " · <section>"),
+    # {period} ("" or " · <fiscal year/quarter ended date>", from `periods`)
 
-    def render(self, question: str, hits: list[Hit]) -> str:
+    @property
+    def uses_periods(self) -> bool:
+        return "{period}" in self.excerpt
+
+    def render(self, question: str, hits: list[Hit], periods: dict[str, str] | None = None) -> str:
+        """`periods`: doc_name -> a period phrase such as "fiscal year ended 2023-01-28"."""
+        periods = periods or {}
         excerpts = "\n\n".join(
             self.excerpt.format(
                 n=i,
@@ -23,6 +30,7 @@ class Prompt:
                 page=h.page,
                 text=h.text,
                 section=f" · {h.section}" if h.section else "",
+                period=f" · {periods[h.doc_name]}" if h.doc_name in periods else "",
             )
             for i, h in enumerate(hits, 1)
         )
@@ -57,7 +65,27 @@ ANSWER_V2 = Prompt(
     excerpt="[{n}] {doc_name}{section}, page {page}\n{text}",
 )
 
-PROMPTS: dict[str, Prompt] = {"answer@1": ANSWER_V1, "answer@2": ANSWER_V2}
+# answer@1 plus each filing's period end in the excerpt header, and a note that the year in an
+# excerpt's name follows the question's labels. FinanceBench labels some years differently from
+# the company (its FY2023 for Ulta is the year Ulta calls fiscal 2022), so the model should match
+# the question's period to the excerpt names, not to the company's own year names.
+ANSWER_V3 = Prompt(
+    system=(
+        "You answer questions about companies' SEC filings using only the numbered excerpts "
+        "you are given. Each excerpt's header names its filing, and for 10-K and 10-Q filings "
+        "gives the period the filing covers. The fiscal year in a filing's name (such as "
+        "COMPANY_2023_10K) uses the same labels as the question, even where the company's own "
+        "name for that year differs, so match the question's period to the filing names and "
+        "use the period-end dates to tell years apart. If the question needs a calculation, "
+        "show it briefly. State the answer with its units and the fiscal period it refers to. "
+        "If the excerpts do not contain what the question needs, say you cannot answer from the "
+        "excerpts; do not guess or use outside knowledge. Keep the answer under 150 words."
+    ),
+    template="Excerpts:\n\n{excerpts}\n\nQuestion: {question}",
+    excerpt="[{n}] {doc_name}{period}, page {page}\n{text}",
+)
+
+PROMPTS: dict[str, Prompt] = {"answer@1": ANSWER_V1, "answer@2": ANSWER_V2, "answer@3": ANSWER_V3}
 
 CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
