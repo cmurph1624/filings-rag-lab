@@ -103,12 +103,15 @@ scope. This is the full set of retrieval-only runs from PRs 2–7.
 
 What the grid shows:
 
-- **Hybrid (BM25 + vector RRF) is below vector alone in every pipeline and scope.** It was
-  dropped from the ladder after PR 4 and the per-pipeline re-tests agree.
+- **Hybrid (BM25 + vector RRF) is below vector alone** for `naive-fixed@1` (with and without rules
+  scope) and `table-preserving@1` (rules scope). It was dropped from the ladder after PR 4. It was
+  not tested with `structured@1` or under a reranker.
 - **`rerank-3-lite` is within 0.006 recall@10 of `rerank-3`** at 40% of the price ($0.09 vs
   $0.23 per 150 questions). Either is a rounding error next to generation.
-- **The oracle scope (gold filing only) is an upper bound, not a result.** Rules + rerank (0.815)
-  beats it, so the remaining ranking gap is inside the right filing, not across filings.
+- **The oracle scope (gold filing only) is an upper bound, not a result.** Without a reranker it
+  reaches 0.774, below rules + rerank (0.815), so the reranker adds more than perfect filing
+  selection does. Where the remaining gap sits is untested until there is an oracle + rerank-3
+  run, which is a cheap P2 follow-up.
 - **The `llm` scope is about the same as rules** (0.677 vs 0.663, gold in scope 149 vs 147) at
   $0.023 per 150 questions. Rules stayed on the ladder because they cost nothing and keep the
   ladder deterministic.
@@ -133,5 +136,9 @@ configs but highest on accuracy.
 - **P0 run 60 was not re-judged.** `frl judge` skips questions that already have a verdict, and
   the judge (`judge@1`, Opus 5.5) hasn't changed since run 60, so run 60's verdicts compare as
   they are.
-- **Pacing:** the runs went through the usage governor (`backends/governor.py`). The five full
-  runs took about 16 hours unattended on 2026-10-30, with no pauses.
+- **Pacing:** the runs went through the usage governor (`backends/governor.py`). Runs 635–638
+  and the last 140 questions of run 616 took about 16.5 hours unattended on 2026-10-30, with no
+  pauses.
+- **Code revisions:** run 136 was made at `98b14f0` and the first 10 questions of run 616 at
+  `0d0449f` (PR 7). Everything else was made at this PR's `a97724e`. The `git` row in
+  [`p1-report.md`](p1-report.md) records this.
