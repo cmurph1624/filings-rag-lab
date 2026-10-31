@@ -1,7 +1,11 @@
 """Score a router against the hand route labels (`routes@1`), without any generation."""
 
+import re
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any
+
+import psycopg
 
 from filings_rag.eval.routes import RouteLabel
 from filings_rag.facts.lookup import parse_period
@@ -59,3 +63,82 @@ def summarize(scores: list[RouteScore]) -> str:
                 f" {';'.join(s.plan.to_json()['periods'])}"
             )
     return "\n".join(lines)
+
+
+# --- judge-free fact-route accuracy ----------------------------------------------------------
+
+NUMBER = re.compile(r"-?\$?\s*-?\d[\d,]*(?:\.\d+)?\s*%?")
+
+
+def gold_number(answer: str) -> tuple[float, int, bool] | None:
+    """(value, decimals, is_percent) when the gold answer is a bare number ("$5409.00", "2.8%",
+    "-3.7"), else None: a sentence ("Yes, it rose from 20% to 23%") can't be checked this way,
+    so those questions are left to the judge."""
+    m = NUMBER.fullmatch(answer.strip())
+    if m is None:
+        return None
+    raw = m[0].replace("$", "").replace(",", "").replace(" ", "")
+    pct = raw.endswith("%")
+    raw = raw.rstrip("%")
+    decimals = len(raw.split(".")[1]) if "." in raw else 0
+    return float(raw), decimals, pct
+
+
+def fact_matches_gold(value: float, unit: str, gold: tuple[float, int, bool]) -> bool:
+    """Rounded to the gold's precision, the fact equals the gold number in some scale the
+    gold could be written in: % for ratios, $, $M or $B for money, or the plain value."""
+    g, decimals, pct = gold
+    tol = 0.5 * 10**-decimals + 1e-9
+    scales = [100.0] if pct else [1.0, 100.0]
+    if unit == "usd":
+        scales = [1.0, 1e-6, 1e-9]
+    return any(abs(value * s - g) <= tol or abs(value * s - g) <= 0.005 * abs(g) for s in scales)
+
+
+@dataclass(frozen=True)
+class FactCheck:
+    question_id: str
+    gold: str
+    shown: str | None  # the headline fact's display, or why there was none
+    ok: bool
+
+
+def headline(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The fact an answer would lead with: an average if there is one, else the last computed."""
+    ok = [f for f in facts if f.get("error") is None]
+    averages = [f for f in ok if f["period"].endswith("average")]
+    pick = averages or ok
+    return pick[-1] if pick else None
+
+
+def fact_route_accuracy(
+    conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteLabel]
+) -> list[FactCheck]:
+    """For questions labelled `fact` whose gold answer is a bare number: does the headline
+    computed fact equal it?"""
+    rows = conn.execute(
+        "SELECT r.question_id, q.answer, r.route FROM run_questions r"
+        " JOIN questions q ON q.id = r.question_id WHERE r.run_id = %s ORDER BY 1",
+        (run_id,),
+    ).fetchall()
+    out = []
+    for qid, answer, route in rows:
+        if labels.get(qid) is None or labels[qid].route != "fact":
+            continue
+        gold = gold_number(answer)
+        if gold is None:
+            continue
+        top = headline((route or {}).get("facts", []))
+        if top is None:
+            out.append(FactCheck(qid, answer, None if top is None else top["display"], False))
+            continue
+        unit = (
+            "usd"
+            if top["display"].startswith("$")
+            else "pct"
+            if top["display"].endswith("%")
+            else "x"
+        )
+        value = top["value"]
+        out.append(FactCheck(qid, answer, top["display"], fact_matches_gold(value, unit, gold)))
+    return out

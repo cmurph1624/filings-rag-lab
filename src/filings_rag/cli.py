@@ -277,6 +277,20 @@ def route_eval_cmd(
     typer.echo(route_eval.summarize(scores))
 
 
+@route_app.command("facts")
+def route_facts_cmd(run_id: int = typer.Argument(..., help="A run made with a [router]")) -> None:
+    """Judge-free fact-route accuracy: for fact-labelled questions whose gold answer is a bare
+    number, does the headline computed fact equal it?"""
+    labels = routes.load(CORPUS / "route_labels.csv")
+    with psycopg.connect(get_settings().database_url) as conn:
+        checks = route_eval.fact_route_accuracy(conn, run_id, labels)
+    ok = sum(c.ok for c in checks)
+    typer.echo(f"run {run_id}: {ok}/{len(checks)} headline facts equal the gold number")
+    for c in checks:
+        if not c.ok:
+            typer.echo(f"  {c.question_id[16:]}  gold {c.gold}  fact {c.shown or '–'}")
+
+
 @facts_app.command("coverage")
 def facts_coverage_cmd(
     out: str = typer.Option("", help="Also write the markdown to this file"),

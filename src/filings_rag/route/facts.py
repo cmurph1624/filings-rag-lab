@@ -85,7 +85,8 @@ def compute_plan(facts: M.Facts, plan: RoutePlan) -> list[FactResult]:
     out: list[FactResult] = []
     for metric in plan.metrics:
         values: list[M.MetricValue] = []
-        for period, extra in targets(metric, plan.periods):
+        wanted = targets(metric, plan.periods)
+        for period, extra in wanted:
             opts = plan.options.get(metric, {}) | extra
             try:
                 v = M.compute(facts, metric, period, **opts)
@@ -98,7 +99,9 @@ def compute_plan(facts: M.Facts, plan: RoutePlan) -> list[FactResult]:
                     metric, period_label(period), v.value, v.display(), v.formula, _sources(v)
                 )
             )
-        if plan.aggregate == "average" and len(values) > 1 and metric not in GROWTH:
+        # Only over every target: an average of the years that happened to compute would be
+        # shown as the average of all of them.
+        if plan.aggregate == "average" and len(values) == len(wanted) > 1 and metric not in GROWTH:
             mean = sum(v.value for v in values) / len(values)
             first, last = period_label(values[0].period), period_label(values[-1].period)
             shown = M.MetricValue(metric, values[-1].period, mean, values[0].unit, "", ())
