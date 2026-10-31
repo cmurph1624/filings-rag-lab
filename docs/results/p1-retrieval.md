@@ -112,8 +112,8 @@ What the grid shows:
 - **The oracle scope (gold filing only) is an upper bound, not a result.** Without a reranker it
   reaches 0.774, below rules + rerank (0.815), so the reranker adds more than perfect filing
   selection does. With the reranker (run 639) it reaches 0.903. So rules scope still leaves about
-  0.09 recall@10 to filing selection, mostly questions whose year doesn't map one-to-one to a
-  filing (see [`p1-misses.md`](p1-misses.md)).
+  0.09 recall@10 to filing selection, for example 00494, 00651 and 02416, whose year doesn't map
+  one-to-one to a filing (see [`p1-misses.md`](p1-misses.md)).
 - **The `llm` scope is about the same as rules** (0.677 vs 0.663, gold in scope 149 vs 147) at
   $0.023 per 150 questions. Rules stayed on the ladder because they cost nothing and keep the
   ladder deterministic.

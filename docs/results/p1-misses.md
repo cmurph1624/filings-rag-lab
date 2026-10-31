@@ -91,10 +91,13 @@ chunks put the needed statement in the top 10, but `structured@1` didn't. Run 63
 be missing from another's top 10. This is the cost of `structured@1`'s lower recall@10 (0.776 vs
 0.815) that accuracy averaged over.
 
-**Perfect filing selection fixes most scope misses.** Run 639 (oracle scope + `rerank-3`,
-retrieval-only, `naive-fixed@1`, an upper bound) has recall@10 0.903 against 0.815 for rules +
-rerank (run 390). Run 390 finds no labelled evidence for 00494, 00651, 00685, 01079 or 02416. Run
-639 finds it for all of them except 00685, and also for 01911.
+**Oracle scope recovers evidence for 4 of the 5 filing-selection cases checked.** Run 639
+(oracle scope + `rerank-3`, retrieval-only, an upper bound) has recall@10 0.903 against 0.815 for
+rules + rerank (run 390). Both use `naive-fixed@1`, so this compares pipelines too: the misses above
+come from `structured@1` run 638. Run 390 finds no labelled evidence for the scope misses 00494,
+00651, 00685 and 02416, or for 01079. Run 639 finds it for all of them except 00685, and also for
+the retrieval miss 01911. The three Ulta misses are a prompt issue that an oracle scope can't fix.
+The 0.09 gap is about 13 questions, and only these are checked here.
 
 ## What this says for P2
 
