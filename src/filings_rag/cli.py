@@ -309,8 +309,8 @@ def report_cmd(
     with psycopg.connect(get_settings().database_url) as conn:
         try:
             summaries = [report.summarize(conn, r) for r in [run_id, *(vs or [])]]
-            labels = CORPUS / "route_labels.csv"
-            route_labels = routes.load(labels) if labels.exists() else None
+            labels_path = CORPUS / "route_labels.csv"
+            route_labels = routes.load(labels_path) if labels_path.exists() else None
             text = report.render(summaries, retrieval_only=retrieval_only, routes=route_labels)
         except ValueError as e:  # unknown run, or a stored config that no longer loads
             typer.echo(f"cannot report: {e}", err=True)
