@@ -1,0 +1,185 @@
+# concepts@1: statement line items as XBRL concepts, and the inputs each metric needs.
+# Versioned like pipelines: never edit in place; copy to a new file and bump the version.
+#
+# [items.<name>]: one statement line. `kind` is "instant" (a balance, at a date) or "duration"
+# (a flow, over a period). `concepts` are us-gaap concepts in priority order: the first one a
+# filing reports for the period is used. Companies tag the same line differently.
+# [metrics.<name>]: the items a metric needs (P2 PR 4 adds the formulas). An item names itself.
+
+version = "concepts@1"
+
+[items.revenue]
+kind = "duration"
+concepts = [
+  "Revenues",
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "RevenueFromContractWithCustomerIncludingAssessedTax",
+  "SalesRevenueNet",
+  "SalesRevenueGoodsNet",
+  "RevenuesNetOfInterestExpense",
+]
+
+[items.cogs]
+kind = "duration"
+concepts = [
+  "CostOfRevenue",
+  "CostOfGoodsAndServicesSold",
+  "CostOfGoodsSold",
+  "CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+  "CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization",
+]
+
+[items.gross_profit]
+kind = "duration"
+concepts = ["GrossProfit"]
+
+[items.operating_income]
+kind = "duration"
+concepts = ["OperatingIncomeLoss"]
+
+[items.pretax_income]
+kind = "duration"
+concepts = [
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+  "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",
+]
+
+[items.income_tax]
+kind = "duration"
+concepts = ["IncomeTaxExpenseBenefit"]
+
+[items.net_income]
+kind = "duration"
+concepts = ["NetIncomeLoss", "NetIncomeLossAvailableToCommonStockholdersBasic", "ProfitLoss"]
+
+[items.d_and_a]
+kind = "duration"
+concepts = [
+  "DepreciationDepletionAndAmortization",
+  "DepreciationAmortizationAndAccretionNet",
+  "DepreciationAndAmortization",
+  "DepreciationAmortizationAndOther",
+]
+
+[items.capex]
+kind = "duration"
+concepts = [
+  "PaymentsToAcquirePropertyPlantAndEquipment",
+  "PaymentsToAcquireProductiveAssets",
+  "PaymentsForCapitalImprovements",
+]
+
+[items.cfo]
+kind = "duration"
+concepts = [
+  "NetCashProvidedByUsedInOperatingActivities",
+  "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+]
+
+[items.cfi]
+kind = "duration"
+concepts = [
+  "NetCashProvidedByUsedInInvestingActivities",
+  "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations",
+]
+
+[items.cff]
+kind = "duration"
+concepts = [
+  "NetCashProvidedByUsedInFinancingActivities",
+  "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations",
+]
+
+[items.dividends_paid]
+kind = "duration"
+concepts = ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"]
+
+[items.total_assets]
+kind = "instant"
+concepts = ["Assets"]
+
+[items.current_assets]
+kind = "instant"
+concepts = ["AssetsCurrent"]
+
+[items.current_liabilities]
+kind = "instant"
+concepts = ["LiabilitiesCurrent"]
+
+[items.inventory]
+kind = "instant"
+concepts = [
+  "InventoryNet",
+  "RetailRelatedInventoryMerchandise",
+  "InventoryFinishedGoodsNetOfReserves",
+  "InventoryGross",
+]
+
+[items.accounts_receivable]
+kind = "instant"
+concepts = ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent", "AccountsNotesAndLoansReceivableNetCurrent"]
+
+[items.accounts_payable]
+kind = "instant"
+concepts = ["AccountsPayableCurrent", "AccountsPayableTradeCurrent", "AccountsPayableAndAccruedLiabilitiesCurrent"]
+
+[items.ppe_net]
+kind = "instant"
+concepts = [
+  "PropertyPlantAndEquipmentNet",
+  "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+]
+
+[items.cash]
+kind = "instant"
+concepts = [
+  "CashAndCashEquivalentsAtCarryingValue",
+  "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+  "Cash",
+]
+
+[items.short_term_investments]
+kind = "instant"
+concepts = ["ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"]
+
+[items.debt]
+kind = "instant"
+concepts = [
+  "LongTermDebt",
+  "LongTermDebtAndCapitalLeaseObligations",
+  "DebtAndCapitalLeaseObligations",
+  "LongTermDebtNoncurrent",
+]
+
+# Derived metrics: the items each needs. Ratios that use an average balance need the prior
+# period too; the route labels' `periods` already include it.
+[metrics]
+working_capital = ["current_assets", "current_liabilities"]
+current_ratio = ["current_assets", "current_liabilities"]
+quick_ratio = ["cash", "accounts_receivable", "current_liabilities"]
+gross_margin = ["revenue", "cogs"]
+operating_margin = ["operating_income", "revenue"]
+net_margin = ["net_income", "revenue"]
+cogs_margin = ["cogs", "revenue"]
+da_margin = ["d_and_a", "revenue"]
+ebitda = ["operating_income", "d_and_a"]
+ebitda_margin = ["operating_income", "d_and_a", "revenue"]
+fcf = ["cfo", "capex"]
+fcf_conversion = ["cfo", "capex", "net_income"]
+capex_pct_revenue = ["capex", "revenue"]
+capital_intensity = ["total_assets", "revenue"]
+fixed_asset_ratio = ["ppe_net", "total_assets"]
+roa = ["net_income", "total_assets"]
+asset_turnover = ["revenue", "total_assets"]
+fixed_asset_turnover = ["revenue", "ppe_net"]
+inventory_turnover = ["cogs", "inventory"]
+dpo = ["accounts_payable", "cogs", "inventory"]
+ccc = ["inventory", "cogs", "accounts_receivable", "revenue", "accounts_payable"]
+ocf_ratio = ["cfo", "current_liabilities"]
+effective_tax_rate = ["income_tax", "pretax_income"]
+payout_ratio = ["dividends_paid", "net_income"]
+retention_ratio = ["dividends_paid", "net_income"]
+revenue_growth = ["revenue"]
+revenue_cagr = ["revenue"]
+operating_income_growth = ["operating_income"]

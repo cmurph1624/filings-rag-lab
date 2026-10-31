@@ -16,6 +16,8 @@ from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import judge as judging
 from filings_rag.eval import labels, report, routes
+from filings_rag.facts import concepts, coverage
+from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
 from filings_rag.harness.prompts import get_judge_prompt, get_prompt
@@ -39,6 +41,9 @@ corpus_app = typer.Typer(no_args_is_help=True, help="Filing corpus")
 app.add_typer(corpus_app, name="corpus")
 ingest_app = typer.Typer(no_args_is_help=True, help="Ingest pipelines")
 app.add_typer(ingest_app, name="ingest")
+facts_app = typer.Typer(no_args_is_help=True, help="XBRL facts")
+app.add_typer(facts_app, name="facts")
+CONCEPTS = ROOT / "config" / "concepts.toml"
 
 
 @db_app.command("migrate")
@@ -195,6 +200,39 @@ def ingest_label(pipeline: str = typer.Argument(..., help="name@version")) -> No
         typer.echo(f"  unlabelled {m}")
     for b in r.broad:
         typer.echo(f"  too generic (short passage, many chunks) {b}")
+
+
+@facts_app.command("load")
+def facts_load_cmd() -> None:
+    """Load SEC companyfacts (XBRL) for every company in corpus/companies.csv into xbrl_facts."""
+    settings = get_settings()
+    client = EdgarClient(settings.sec_user_agent, DATA / "edgar" / "cache")
+    with CORPUS.joinpath("companies.csv").open() as fh:
+        ciks = [int(r["cik"]) for r in csv.DictReader(fh)]
+    with psycopg.connect(settings.database_url) as conn:
+        for cik in ciks:
+            s = facts_load.load_company(conn, cik, client.companyfacts(cik))
+            typer.echo(f"CIK {cik}: {s.rows:,} facts ({s.duplicates} repeats skipped)")
+
+
+@facts_app.command("coverage")
+def facts_coverage_cmd(
+    out: str = typer.Option("", help="Also write the markdown to this file"),
+    verify: bool = typer.Option(
+        False, help="Also look for each found value in the question's evidence text"
+    ),
+) -> None:
+    """Are fact and mixed questions' inputs in xbrl_facts, as filed in their gold filing?"""
+    cmap = concepts.load(CONCEPTS)
+    route_labels = routes.load(CORPUS / "route_labels.csv")
+    with psycopg.connect(get_settings().database_url) as conn:
+        results = coverage.check(conn, route_labels, cmap, CORPUS / "companies.csv")
+        text = coverage.render(results, cmap.version)
+        if verify:
+            text += coverage.render_verify(coverage.verify(conn, results))
+    if out:
+        Path(out).write_text(text)
+    typer.echo(text)
 
 
 @app.command("run")
