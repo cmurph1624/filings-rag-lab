@@ -3,7 +3,10 @@
 Small committed files that make the corpus reproducible. Downloaded filings live in `data/` (gitignored).
 
 - `companies.csv`: FinanceBench company name → ticker → SEC CIK, plus `aliases` (`;`-separated:
-  JPM, JnJ, AmEx, Coca Cola, Footlocker, Square...) that rules-based query scoping matches. Activision Blizzard and Foot Locker
+  JPM, JnJ, AmEx, Coca Cola, Footlocker, Square...) that rules-based query scoping matches. `label_offset`
+  is FinanceBench's fiscal-year label minus the company's own (Ulta: 1, because FinanceBench's
+  FY2023 is Ulta's fiscal 2022). Scope option `fiscal_labels = "financebench"` applies it to the
+  distractor filings, so they use the same labels as the questions. Activision Blizzard and Foot Locker
   are no longer in SEC's ticker file (both acquired), so their CIKs come from EDGAR directly.
 - `overrides.csv`: hand-picked accessions for docs the rules can't settle, each with a reason.
 - `manifest.csv`: output of `frl corpus audit`, one row per FinanceBench document. Regenerate it, don't hand-edit it.
