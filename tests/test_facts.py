@@ -5,7 +5,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from filings_rag.facts import concepts, coverage
+from filings_rag.facts import concepts, coverage, lookup
 from filings_rag.facts import load as facts_load
 
 CONCEPTS = Path(__file__).resolve().parents[1] / "config" / "concepts.toml"
@@ -55,12 +55,12 @@ def test_fact_rows_keep_known_taxonomies_and_drop_repeats() -> None:
 
 def test_fact_matches_instants_years_and_quarters() -> None:
     end = date(2023, 1, 28)
-    assert coverage.fact_matches("instant", None, None, date(2023, 1, 30), end)
-    assert not coverage.fact_matches("instant", None, date(2022, 1, 30), end, end)
-    assert coverage.fact_matches("duration", None, date(2022, 1, 30), end, end)
-    assert not coverage.fact_matches("duration", None, date(2022, 7, 31), end, end)  # half year
-    assert coverage.fact_matches("duration", 2, date(2022, 10, 30), end, end)
-    assert not coverage.fact_matches("instant", None, None, date(2022, 1, 29), end)
+    assert lookup.fact_matches("instant", None, None, date(2023, 1, 30), end)
+    assert not lookup.fact_matches("instant", None, date(2022, 1, 30), end, end)
+    assert lookup.fact_matches("duration", None, date(2022, 1, 30), end, end)
+    assert not lookup.fact_matches("duration", None, date(2022, 7, 31), end, end)  # half year
+    assert lookup.fact_matches("duration", 2, date(2022, 10, 30), end, end)
+    assert not lookup.fact_matches("instant", None, None, date(2022, 1, 29), end)
 
 
 def test_period_end_dates_apply_the_offset_to_distractors_only() -> None:
@@ -69,7 +69,7 @@ def test_period_end_dates_apply_the_offset_to_distractors_only() -> None:
         ("ULTABEAUTY_2021_10K", date(2022, 1, 29), False),
         ("BESTBUY_2024Q2_10Q", date(2023, 7, 29), True),
     ]
-    ends = coverage.period_end_dates(docs, 1)
+    ends = lookup.period_end_dates(docs, 1)
     assert ends[(2023, None)] == date(2023, 1, 28)
     assert ends[(2022, None)] == date(2022, 1, 29)  # Ulta's fiscal 2021 is FinanceBench FY2022
     assert ends[(2024, 2)] == date(2023, 7, 29)
@@ -77,9 +77,9 @@ def test_period_end_dates_apply_the_offset_to_distractors_only() -> None:
 
 def test_target_end_falls_back_to_shifting_the_gold_period() -> None:
     gold = ((2017, None), date(2018, 1, 28))
-    assert coverage.target_end((2015, None), {}, gold) == date(2016, 1, 28)
-    assert coverage.target_end((2017, 2), {}, gold) is None  # a quarter from an annual filing
-    assert coverage.parse_period("Q2 FY2023") == (2023, 2)
+    assert lookup.target_end((2015, None), {}, gold) == date(2016, 1, 28)
+    assert lookup.target_end((2017, 2), {}, gold) is None  # a quarter from an annual filing
+    assert lookup.parse_period("Q2 FY2023") == (2023, 2)
 
 
 @pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
@@ -105,10 +105,10 @@ def test_find_respects_the_accession_filter_and_concept_order() -> None:
         "RetailRelatedInventoryMerchandise": [("GOLD", None, end, 1.0)],
         "InventoryNet": [("OTHER", None, end, 2.0), ("GOLD", None, end, 3.0)],
     }
-    assert coverage.find(facts, inv, None, end, {"GOLD"}) == ("InventoryNet", 3.0)
+    assert lookup.find(facts, inv, None, end, {"GOLD"}) == ("InventoryNet", "GOLD", 3.0)
     only_other = {"InventoryNet": [("OTHER", None, end, 2.0)]}
-    assert coverage.find(only_other, inv, None, end, {"GOLD"}) is None
-    assert coverage.find(only_other, inv, None, end, None) == ("InventoryNet", 2.0)
+    assert lookup.find(only_other, inv, None, end, {"GOLD"}) is None
+    assert lookup.find(only_other, inv, None, end, None) == ("InventoryNet", "OTHER", 2.0)
 
 
 def test_question_status_from_its_checks() -> None:
@@ -128,7 +128,7 @@ def test_period_end_dates_prefer_the_benchmark_doc_on_a_collision() -> None:
         ("ULTABEAUTY_2023_10K", date(2023, 1, 28), True),
     ]
     for order in (docs, docs[::-1]):
-        assert coverage.period_end_dates(order, 1)[(2023, None)] == date(2023, 1, 28)
+        assert lookup.period_end_dates(order, 1)[(2023, None)] == date(2023, 1, 28)
 
 
 def test_printed_forms() -> None:
