@@ -17,8 +17,11 @@ answer at plain API rates ($0.016 with the Batch API). Accuracy is 81% when retr
 evidence and 45% when it doesn't. See [`docs/results/p0-baseline.md`](docs/results/p0-baseline.md)
 for the failure analysis.
 
-Next, P1: metadata filters, table-preserving chunks, hybrid retrieval and a reranker, measured
-on a corpus with distractor fiscal years.
+**P1 done: retrieval.** On a harder corpus with 283 distractor filings, the naive baseline drops
+to 60.7%. Rules-based company/period scoping plus a Voyage reranker lifts it to 78.0%, and the
+`structured@1` pipeline (context headers on each chunk) reaches **80.7% (121/150)** on the open
+subset, at $0.025 per correct answer at plain API rates ($0.013 Batch). Hybrid BM25 didn't help.
+See [`docs/results/p1-retrieval.md`](docs/results/p1-retrieval.md).
 
 ## Reproduce
 
