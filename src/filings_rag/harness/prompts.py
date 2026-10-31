@@ -20,8 +20,16 @@ class Prompt:
     def uses_periods(self) -> bool:
         return "{period}" in self.excerpt
 
-    def render(self, question: str, hits: list[Hit], periods: dict[str, str] | None = None) -> str:
-        """`periods`: doc_name -> a period phrase such as "fiscal year ended 2023-01-28"."""
+    def render(
+        self,
+        question: str,
+        hits: list[Hit],
+        periods: dict[str, str] | None = None,
+        facts: str = "",
+    ) -> str:
+        """`periods`: doc_name -> a period phrase such as "fiscal year ended 2023-01-28".
+        `facts`: the fact route's Facts section ("" for none); only templates with {facts}
+        show it."""
         periods = periods or {}
         excerpts = "\n\n".join(
             self.excerpt.format(
@@ -34,7 +42,7 @@ class Prompt:
             )
             for i, h in enumerate(hits, 1)
         )
-        return self.template.format(excerpts=excerpts, question=question)
+        return self.template.format(excerpts=excerpts, question=question, facts=facts)
 
 
 ANSWER_V1 = Prompt(
@@ -85,7 +93,37 @@ ANSWER_V3 = Prompt(
     excerpt="[{n}] {doc_name}{period}, page {page}\n{text}",
 )
 
-PROMPTS: dict[str, Prompt] = {"answer@1": ANSWER_V1, "answer@2": ANSWER_V2, "answer@3": ANSWER_V3}
+# answer@3 plus the fact route's Facts section: values computed in code from the filing's XBRL
+# data, each with its formula and source facts. The model uses them as given instead of reading
+# the numbers out of table excerpts.
+ANSWER_V4 = Prompt(
+    system=(
+        "You answer questions about companies' SEC filings using only the numbered excerpts "
+        "and, when given, the Facts section. Facts are computed in code from the filing's XBRL "
+        "financial data, each with its formula and the line items it used: use their values "
+        "as given for the metrics they cover and cite them as [F1], [F2]. If the question "
+        "defines a metric differently from a fact's formula, follow the question and compute "
+        "it from the listed line items or the excerpts. A fact marked unavailable was not "
+        "found; use the excerpts instead. Each excerpt's header names its filing, and for 10-K "
+        "and 10-Q filings gives the period the filing covers. The fiscal year in a filing's "
+        "name (such as COMPANY_2023_10K) uses the same labels as the question, even where the "
+        "company's own name for that year differs, so match the question's period to the "
+        "filing names and use the period-end dates to tell years apart. If the question needs "
+        "a calculation, show it briefly. State the answer with its units and the fiscal period "
+        "it refers to. If neither the facts nor the excerpts contain what the question needs, "
+        "say you cannot answer; do not guess or use outside knowledge. Keep the answer under "
+        "150 words."
+    ),
+    template="{facts}Excerpts:\n\n{excerpts}\n\nQuestion: {question}",
+    excerpt="[{n}] {doc_name}{period}, page {page}\n{text}",
+)
+
+PROMPTS: dict[str, Prompt] = {
+    "answer@1": ANSWER_V1,
+    "answer@2": ANSWER_V2,
+    "answer@3": ANSWER_V3,
+    "answer@4": ANSWER_V4,
+}
 
 CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 

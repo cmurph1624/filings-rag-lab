@@ -9,10 +9,11 @@ from typing import Any
 
 from filings_rag import corpora
 from filings_rag.retrieve.factory import resolve_spec
+from filings_rag.route.router import resolve_router
 
 REQUIRED = {"name", "pipeline", "retriever"}
 # No [generation] means a retrieval-only run: retrieval is scored, no model is called.
-OPTIONAL = {"questions", "corpus", "execution", "generation", "judge"}
+OPTIONAL = {"questions", "corpus", "execution", "generation", "judge", "router"}
 NOT_HASHED = {"name", "execution"}  # labels and how-to-run settings don't change results
 EXECUTION_DEFAULTS: dict[str, int] = {"concurrency": 2, "max_consecutive_failures": 5}
 
@@ -28,6 +29,7 @@ class RunConfig:
     questions: str
     execution: dict[str, int]
     raw: dict[str, Any] = field(repr=False)
+    router: dict[str, Any] | None = None  # resolved [router], or None
 
     @property
     def hash(self) -> str:
@@ -39,6 +41,9 @@ class RunConfig:
         if self.corpus != corpora.DEFAULT:
             shaped["corpus"] = self.corpus
         shaped["retriever"] = resolve_spec(self.retriever)  # code defaults count too
+        shaped.pop("router", None)
+        if self.router is not None:  # no router adds nothing, so older configs keep their hashes
+            shaped["router"] = self.router
         blob = json.dumps(shaped, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
@@ -78,6 +83,7 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
             if table in raw and key not in raw[table]:
                 raise ValueError(f"[{table}] needs {key!r}")
     resolve_spec(raw["retriever"])  # fail on a bad [retriever] at load time, not mid-run
+    router = resolve_router(raw.get("router"))
     corpus = raw.get("corpus", corpora.DEFAULT)
     corpora.parse_ref(corpus)
     execution = dict(raw.get("execution", {}))
@@ -94,6 +100,7 @@ def from_dict(raw: dict[str, Any]) -> RunConfig:
         questions=raw.get("questions", "financebench-open"),
         execution=EXECUTION_DEFAULTS | execution,
         raw=raw,
+        router=router,
     )
 
 

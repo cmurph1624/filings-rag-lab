@@ -14,6 +14,7 @@ PINNED = {
     "answer@1": "6def313c45d7a981",
     "answer@2": "bb30e8c3aa0ce6e2",
     "answer@3": "f531bf0821b3ee1f",
+    "answer@4": "246950f37f3b5cb9",
 }
 PINNED_JUDGE = {"judge@1": "d22124b2220d1927"}
 

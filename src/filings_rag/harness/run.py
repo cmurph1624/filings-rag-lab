@@ -22,12 +22,17 @@ from psycopg.types.json import Jsonb
 
 from filings_rag.backends.base import ModelBackend, Result
 from filings_rag.backends.governor import UsagePaused
+from filings_rag.facts import concepts
+from filings_rag.facts.lookup import FactLookup, read_offsets
 from filings_rag.harness.config import RunConfig
 from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, embedding_cost, model_cost
 from filings_rag.retrieve.base import Retrieval, RetrievalError, Retriever
 from filings_rag.retrieve.scope import Scope, Scoper
+from filings_rag.route import facts as route_facts
+from filings_rag.route.plan import RoutePlan
+from filings_rag.route.router import Router
 
 Log = Callable[[str], None]
 
@@ -104,6 +109,8 @@ class _Job:
     retrieval: Retrieval
     retrieve_s: float
     scope: Scope | None = None
+    route: dict[str, Any] | None = None  # plan, anchor and computed facts
+    route_aux: dict[str, Any] | None = None  # the route model's spend
 
 
 _RECORD = """
@@ -111,11 +118,11 @@ INSERT INTO run_questions
     (run_id, question_id, git_sha, retrieved, answer, model, stop_reason,
      input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens,
      embed_tokens, gen_cost_usd, embed_cost_usd, reported_cost_usd, retrieve_s, generate_s, error,
-     scope, aux)
+     scope, aux, route)
 VALUES (%(run_id)s, %(qid)s, %(git_sha)s, %(retrieved)s, %(answer)s, %(model)s, %(stop)s,
         %(inp)s, %(out)s, %(cr)s, %(cw)s, %(cw1h)s,
         %(emb)s, %(gen_cost)s, %(emb_cost)s, %(reported)s, %(retrieve_s)s, %(generate_s)s,
-        %(error)s, %(scope)s, %(aux)s)
+        %(error)s, %(scope)s, %(aux)s, %(route)s)
 ON CONFLICT (run_id, question_id) DO UPDATE SET
     git_sha = EXCLUDED.git_sha,
     attempts = run_questions.attempts + 1,
@@ -139,6 +146,7 @@ ON CONFLICT (run_id, question_id) DO UPDATE SET
     error = EXCLUDED.error,
     scope = EXCLUDED.scope,
     aux = EXCLUDED.aux,
+    route = EXCLUDED.route,
     answered_at = now()
 """
 
@@ -158,6 +166,44 @@ def pending_questions(
         raise ValueError(f"no questions in set {question_set!r}; run `frl bench pull` first")
     todo = [(qid, text) for qid, text, done in rows if not done]
     return todo, len(rows) - len(todo)
+
+
+class FactRoute:
+    """Computes the facts for a fact or mixed plan, anchored on the scope's filing. Lookups are
+    cached per anchor for the run."""
+
+    def __init__(
+        self,
+        conn: psycopg.Connection[Any],
+        cmap_path: Path | None = None,
+        companies_csv: Path | None = None,
+    ) -> None:
+        root = Path(__file__).resolve().parents[3]
+        self._conn = conn
+        self._cmap = concepts.load(cmap_path or root / "config" / "concepts.toml")
+        self._offsets = read_offsets(companies_csv or root / "corpus" / "companies.csv")
+        self._lookups: dict[str, FactLookup] = {}
+
+    def run(self, plan: RoutePlan, scope: Scope | None) -> tuple[dict[str, Any], str]:
+        """(route record, Facts section for the prompt)."""
+        anchor = None
+        results: list[route_facts.FactResult] = []
+        rec: dict[str, Any]
+        if plan.route != "prose" and scope is not None and scope.record.get("level") != "corpus":
+            anchor = route_facts.choose_anchor(scope.record.get("docs", []), plan)
+        if anchor is not None:
+            try:
+                if anchor not in self._lookups:
+                    self._lookups[anchor] = FactLookup(
+                        self._conn, self._cmap, anchor, self._offsets
+                    )
+                results = route_facts.compute_plan(self._lookups[anchor], plan)
+            except Exception as e:  # no facts this time; the prose path still answers
+                self._conn.rollback()
+                rec = route_facts.record(plan, anchor, [])
+                return rec | {"facts_error": f"{type(e).__name__}: {e}"[:300]}, ""
+        rec = route_facts.record(plan, anchor, results)
+        return rec, route_facts.render_block(anchor, results) if anchor else ""
 
 
 def document_periods(conn: psycopg.Connection[Any]) -> dict[str, str]:
@@ -183,10 +229,15 @@ def execute(
     git: GitInfo,
     *,
     scoper: Scoper | None = None,
+    router: Router | None = None,
+    facts: FactRoute | None = None,
     limit: int | None = None,
+    only: set[str] | None = None,
     log: Log = print,
 ) -> RunStats:
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
+    if only is not None:
+        todo = [(q, t) for q, t in todo if q in only]
     periods = document_periods(conn) if prompt is not None and prompt.uses_periods else None
     conn.commit()
     stats = RunStats(run_id, skipped=skipped)
@@ -224,6 +275,8 @@ def execute(
         aux = {"scope": scope.aux} if scope and scope.aux else {}
         if job is not None:
             aux |= job.retrieval.aux  # e.g. the reranker's spend
+            if job.route_aux:
+                aux["route"] = job.route_aux
         conn.execute(
             _RECORD,
             {
@@ -248,6 +301,7 @@ def execute(
                 "error": error,
                 "scope": Jsonb(scope.record) if scope else None,
                 "aux": Jsonb(aux),
+                "route": Jsonb(job.route) if job and job.route is not None else None,
             },
         )
         conn.commit()
@@ -305,6 +359,20 @@ def execute(
                     conn.rollback()
                     record(None, qid, None, f"scope: {type(e).__name__}: {e}")
                     continue
+            route: dict[str, Any] | None = None
+            route_aux: dict[str, Any] | None = None
+            facts_text = ""
+            if router is not None:
+                try:
+                    plan, route_aux = router.route(qid, question)
+                except UsagePaused as e:
+                    stats.paused = str(e)
+                    break
+                except Exception as e:
+                    conn.rollback()
+                    record(None, qid, None, f"route: {type(e).__name__}: {e}")
+                    continue
+                route, facts_text = (facts or FactRoute(conn)).run(plan, scope)
             try:
                 retrieval = retriever.retrieve(question, scope.documents if scope else None)
             except Exception as e:
@@ -315,12 +383,14 @@ def execute(
                     spent = _Job(qid, Retrieval([], e.embed_tokens, e.embedder), 0.0, scope)
                 record(spent, qid, None, f"retrieval: {type(e).__name__}: {e}")
                 continue
-            job = _Job(qid, retrieval, time.monotonic() - start, scope)
+            job = _Job(qid, retrieval, time.monotonic() - start, scope, route, route_aux)
             if backend is None or prompt is None:
                 record(job, qid, None, None)
                 continue
             fut = pool.submit(
-                backend.generate, prompt.system, prompt.render(question, retrieval.hits, periods)
+                backend.generate,
+                prompt.system,
+                prompt.render(question, retrieval.hits, periods, facts_text),
             )
             in_flight[fut] = job
             while len(in_flight) >= concurrency:
