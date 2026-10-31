@@ -38,9 +38,13 @@ Judgment calls:
 
 What it says for P2:
 
-- **Mixed questions are the weakest group** at 52.9% (9/17) in run 638. They are where the fact
-  route and standard metric definitions should help most. Five of the eight misses are definition
-  disagreements, and those may stay misses (P2 decision 4).
+- **Mixed questions are the weakest group** at 52.9% (9/17) in run 638. Of the eight misses (see
+  [`p1-misses.md`](p1-misses.md)):
+  - **Four are retrieval misses** that the fact route should fix: a missing balance sheet or income
+    statement, or a missing ratio input (00080, 00540, 00678, 00799).
+  - **Three are definition or judgment disagreements** (00005, 00807, 00790), which may stay misses
+    under standard definitions (P2 decision 4).
+  - **One is a scope miss** (00685, no year in the question).
 - **Fact questions are at 92.1%** (58/63). There the fact route is mostly about determinism and
   traceability, as the plan expects.
 - **Multi-period questions have caught up** (80.0% vs 81.0% single period). Decomposition (P2 PR
