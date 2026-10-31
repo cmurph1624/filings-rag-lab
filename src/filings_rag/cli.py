@@ -16,7 +16,7 @@ from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import judge as judging
 from filings_rag.eval import labels, report, routes
-from filings_rag.facts import concepts, coverage
+from filings_rag.facts import concepts, coverage, lookup, metrics
 from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
@@ -213,6 +213,39 @@ def facts_load_cmd() -> None:
         for cik in ciks:
             s = facts_load.load_company(conn, cik, client.companyfacts(cik))
             typer.echo(f"CIK {cik}: {s.rows:,} facts ({s.duplicates} repeats skipped)")
+
+
+@facts_app.command("get")
+def facts_get_cmd(
+    doc_name: str = typer.Argument(..., help="Anchor filing, e.g. AMAZON_2017_10K"),
+    metric: str = typer.Argument(..., help="A metric or item from config/concepts.toml"),
+    period: str = typer.Argument(..., help='FinanceBench period, e.g. FY2017 or "Q2 FY2023"'),
+    option: Annotated[
+        list[str] | None, typer.Option(help="Metric option as key=value (repeatable)")
+    ] = None,
+) -> None:
+    """Compute one metric from XBRL facts, as filed in the anchor filing where possible."""
+    opts: dict[str, object] = {}
+    for kv in option or []:
+        k, _, raw = kv.partition("=")
+        opts[k] = lookup.parse_period(raw) if k == "since" else raw
+    cmap = concepts.load(CONCEPTS)
+    with psycopg.connect(get_settings().database_url) as conn:
+        facts = lookup.FactLookup(
+            conn, cmap, doc_name, lookup.read_offsets(CORPUS / "companies.csv")
+        )
+        try:
+            v = metrics.compute(facts, metric, lookup.parse_period(period), **opts)
+        except (metrics.MissingInput, ValueError, ZeroDivisionError) as e:
+            typer.echo(f"cannot compute: {e}", err=True)
+            raise typer.Exit(1) from e
+    typer.echo(f"{metric} {period} ({metrics.VERSION}): {v.display()}  [{v.value:.6g}]")
+    typer.echo(f"  = {v.formula}")
+    for f in v.facts:
+        src = "as filed" if f.as_filed else f"from {f.accession}"
+        typer.echo(
+            f"  {f.item} {lookup.period_label(f.period)}: {f.value:,.0f} ({f.concept}, {src})"
+        )
 
 
 @facts_app.command("coverage")
