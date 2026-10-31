@@ -1,0 +1,151 @@
+question_id,route,metrics,periods,multi_period
+financebench_id_00005,mixed,working_capital,FY2022,false
+financebench_id_00070,mixed,working_capital,FY2022,false
+financebench_id_00080,mixed,working_capital,FY2022,false
+financebench_id_00206,prose,,FY2020;FY2021;FY2022,true
+financebench_id_00215,mixed,capital_intensity,FY2022,false
+financebench_id_00216,mixed,quick_ratio,FY2022,false
+financebench_id_00222,mixed,quick_ratio,FY2022,false
+financebench_id_00283,prose,,Q2 FY2023,false
+financebench_id_00288,fact,cash,FY2023;Q2 FY2024,true
+financebench_id_00299,prose,,Q1 FY2021,false
+financebench_id_00302,fact,ppe_net,FY2020;FY2021,true
+financebench_id_00382,prose,,FY2022,false
+financebench_id_00394,prose,,Q2 FY2022,false
+financebench_id_00407,prose,,Q2 FY2023,false
+financebench_id_00438,mixed,operating_margin,FY2021;FY2022,true
+financebench_id_00460,prose,,FY2023;Q2 FY2024,true
+financebench_id_00464,prose,,FY2022,false
+financebench_id_00476,prose,,FY2022,false
+financebench_id_00494,prose,,FY2023,false
+financebench_id_00499,mixed,capex_pct_revenue;fixed_asset_ratio;roa,FY2022,false
+financebench_id_00517,prose,,FY2022,false
+financebench_id_00521,prose,,FY2022;FY2023,true
+financebench_id_00540,mixed,inventory_turnover,FY2022,false
+financebench_id_00552,fact,debt,FY2022;FY2023,true
+financebench_id_00563,prose,,FY2021;FY2022,true
+financebench_id_00566,fact,debt,FY2021;FY2022,true
+financebench_id_00585,fact,effective_tax_rate,FY2021;FY2022,true
+financebench_id_00591,fact,fcf_conversion,FY2021;FY2022,true
+financebench_id_00601,prose,,FY2023,false
+financebench_id_00603,prose,,FY2023,false
+financebench_id_00605,prose,,FY2023,false
+financebench_id_00606,prose,,FY2023,false
+financebench_id_00651,prose,,FY2022;FY2023,true
+financebench_id_00669,prose,,FY2022,false
+financebench_id_00678,mixed,gross_margin,FY2021;FY2022,true
+financebench_id_00684,mixed,gross_margin,FY2022;FY2023,true
+financebench_id_00685,mixed,gross_margin,FY2022;FY2023,true
+financebench_id_00702,prose,,FY2019,false
+financebench_id_00705,prose,,FY2023,false
+financebench_id_00711,mixed,inventory_turnover,FY2021;FY2022,true
+financebench_id_00720,prose,,FY2022,false
+financebench_id_00723,prose,,FY2022,false
+financebench_id_00724,prose,,Q2 FY2023,false
+financebench_id_00735,prose,,FY2021;FY2022,true
+financebench_id_00746,prose,,FY2023,false
+financebench_id_00757,prose,,FY2022,false
+financebench_id_00790,mixed,fixed_asset_ratio;roa,FY2021;FY2022,true
+financebench_id_00799,mixed,quick_ratio,FY2022;FY2023,true
+financebench_id_00807,mixed,quick_ratio,Q2 FY2023,false
+financebench_id_00822,prose,,FY2022,false
+financebench_id_00839,prose,,FY2022,false
+financebench_id_00859,prose,,FY2021,false
+financebench_id_00882,prose,,FY2023,false
+financebench_id_00917,prose,,FY2022,false
+financebench_id_00941,prose,,Q2 FY2023,false
+financebench_id_00956,mixed,revenue_growth,FY2021;FY2022,true
+financebench_id_00995,prose,,FY2022,false
+financebench_id_01009,prose,,FY2022,false
+financebench_id_01028,prose,,FY2022,false
+financebench_id_01077,prose,,FY2021;FY2022;FY2023,true
+financebench_id_01079,prose,,FY2021;FY2022;FY2023,true
+financebench_id_01091,prose,,FY2022,false
+financebench_id_01107,prose,,FY2020;FY2021;FY2022,true
+financebench_id_01148,prose,,FY2023,false
+financebench_id_01163,fact,cfo;cfi;cff,FY2023,false
+financebench_id_01198,prose,,FY2022,false
+financebench_id_01226,prose,,FY2022,false
+financebench_id_01244,prose,,Q2 FY2022,false
+financebench_id_01254,fact,dividends_paid,FY2022,false
+financebench_id_01275,fact,cfo;cfi;cff,FY2023,false
+financebench_id_01279,fact,cfo;cfi;cff,FY2022,false
+financebench_id_01290,prose,,FY2022,false
+financebench_id_01319,prose,,FY2022,false
+financebench_id_01328,prose,,FY2022,false
+financebench_id_01346,fact,effective_tax_rate,FY2021;FY2022,true
+financebench_id_01351,fact,effective_tax_rate,FY2021;FY2022,true
+financebench_id_01474,prose,,Q1 FY2023,false
+financebench_id_01476,prose,,Q1 FY2023,false
+financebench_id_01482,prose,,FY2023,false
+financebench_id_01484,prose,,FY2022,false
+financebench_id_01487,fact,net_margin,Q2 FY2022;Q2 FY2023,true
+financebench_id_01488,prose,,FY2023,false
+financebench_id_01490,prose,,FY2023,false
+financebench_id_01491,prose,,FY2023,false
+financebench_id_01858,prose,,Q2 FY2023,false
+financebench_id_01865,prose,,FY2022,false
+financebench_id_01902,prose,,Q2 FY2024,false
+financebench_id_01911,prose,,FY2022,false
+financebench_id_01912,prose,,FY2022,false
+financebench_id_01928,prose,,FY2023,false
+financebench_id_01930,prose,,FY2022;FY2023,true
+financebench_id_01935,prose,,FY2022,false
+financebench_id_01936,prose,,Q2 FY2023,false
+financebench_id_01964,prose,,FY2022,false
+financebench_id_01981,prose,,FY2022,false
+financebench_id_02024,prose,,FY2021,false
+financebench_id_02049,prose,,Q2 FY2022;Q2 FY2023,true
+financebench_id_02119,prose,,Q1 FY2021,false
+financebench_id_02416,prose,,FY2021,false
+financebench_id_02419,prose,,Q2 FY2023,false
+financebench_id_02608,fact,net_margin,FY2015;FY2016;FY2017,true
+financebench_id_02981,fact,operating_margin,FY2019;FY2020;FY2021,true
+financebench_id_02987,fact,fixed_asset_turnover,FY2018;FY2019,true
+financebench_id_03029,fact,capex,FY2018,false
+financebench_id_03031,fact,working_capital,FY2021,false
+financebench_id_03069,fact,da_margin,FY2015,false
+financebench_id_03282,fact,current_liabilities,FY2017,false
+financebench_id_03471,fact,current_ratio,FY2020,false
+financebench_id_03473,fact,roa,FY2016;FY2017,true
+financebench_id_03531,fact,current_assets,FY2019,false
+financebench_id_03620,fact,ebitda;capex,FY2022,false
+financebench_id_03718,fact,revenue_cagr,FY2020;FY2021;FY2022,true
+financebench_id_03838,fact,revenue_growth,FY2019;FY2020,true
+financebench_id_03849,fact,capex_pct_revenue,FY2018;FY2019;FY2020,true
+financebench_id_03856,fact,ocf_ratio,FY2017,false
+financebench_id_03882,fact,accounts_receivable,FY2020,false
+financebench_id_04080,fact,inventory_turnover,FY2020;FY2021,true
+financebench_id_04103,fact,ccc,FY2018;FY2019,true
+financebench_id_04171,fact,accounts_payable,FY2018,false
+financebench_id_04209,fact,total_assets,FY2021,false
+financebench_id_04254,fact,ebitda,FY2021,false
+financebench_id_04302,fact,cogs_margin,FY2016;FY2017;FY2018,true
+financebench_id_04412,fact,asset_turnover,FY2019;FY2020,true
+financebench_id_04417,fact,inventory,FY2019,false
+financebench_id_04458,fact,ebitda_margin,FY2015,false
+financebench_id_04481,fact,ebitda_margin,FY2022,false
+financebench_id_04660,fact,current_ratio,FY2016,false
+financebench_id_04672,fact,ppe_net,FY2018,false
+financebench_id_04700,fact,cogs,FY2016,false
+financebench_id_04735,fact,ocf_ratio,FY2015,false
+financebench_id_04784,fact,operating_margin,FY2018;FY2019,true
+financebench_id_04854,fact,fcf,FY2020,false
+financebench_id_04980,fact,capex,FY2021,false
+financebench_id_05718,fact,dividends_paid,FY2020,false
+financebench_id_05915,fact,fixed_asset_turnover,FY2017;FY2018,true
+financebench_id_06247,fact,dpo,FY2017;FY2018,true
+financebench_id_06272,fact,payout_ratio,FY2022,false
+financebench_id_06655,fact,dpo,FY2016;FY2017,true
+financebench_id_06741,fact,ebitda_margin,FY2018;FY2019;FY2020,true
+financebench_id_07507,fact,operating_income_growth,FY2015;FY2016,true
+financebench_id_07661,fact,cfo,FY2020,false
+financebench_id_07966,fact,capex_pct_revenue,FY2017;FY2018;FY2019,true
+financebench_id_08135,fact,revenue_growth,FY2016;FY2017,true
+financebench_id_08286,fact,net_income,FY2019,false
+financebench_id_09724,fact,cogs_margin,FY2021,false
+financebench_id_10130,fact,dpo,FY2019;FY2020,true
+financebench_id_10136,fact,retention_ratio,FY2022,false
+financebench_id_10285,fact,ppe_net,FY2018,false
+financebench_id_10420,fact,roa,FY2021;FY2022,true
+financebench_id_10499,fact,inventory_turnover,FY2018;FY2019,true

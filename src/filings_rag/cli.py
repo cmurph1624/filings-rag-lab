@@ -15,7 +15,7 @@ from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import judge as judging
-from filings_rag.eval import labels, report
+from filings_rag.eval import labels, report, routes
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
 from filings_rag.harness.prompts import get_judge_prompt, get_prompt
@@ -309,7 +309,9 @@ def report_cmd(
     with psycopg.connect(get_settings().database_url) as conn:
         try:
             summaries = [report.summarize(conn, r) for r in [run_id, *(vs or [])]]
-            text = report.render(summaries, retrieval_only=retrieval_only)
+            labels_path = CORPUS / "route_labels.csv"
+            route_labels = routes.load(labels_path) if labels_path.exists() else None
+            text = report.render(summaries, retrieval_only=retrieval_only, routes=route_labels)
         except ValueError as e:  # unknown run, or a stored config that no longer loads
             typer.echo(f"cannot report: {e}", err=True)
             raise typer.Exit(1) from e

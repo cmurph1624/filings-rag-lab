@@ -7,6 +7,11 @@ Small committed files that make the corpus reproducible. Downloaded filings live
   are no longer in SEC's ticker file (both acquired), so their CIKs come from EDGAR directly.
 - `overrides.csv`: hand-picked accessions for docs the rules can't settle, each with a reason.
 - `manifest.csv`: output of `frl corpus audit`, one row per FinanceBench document. Regenerate it, don't hand-edit it.
+- `route_labels.csv`: hand route labels for the 150 questions (`routes@1`): `route` (fact /
+  mixed / prose), the `metrics` a fact or mixed answer needs, the `periods` it needs data from,
+  and `multi_period`. Rules and vocabulary are in `src/filings_rag/eval/routes.py`. `frl report`
+  adds accuracy by route and by multi-period when the file is present. Hand-written and frozen:
+  change it only as a new version.
 - `distractors.csv`: output of `frl corpus expand`, the same companies' other filings: every
   10-K for FY2015–2023 and, for the six companies with 10-Q questions (3M, Amcor, Best Buy,
   JPMorgan, MGM, Pfizer), every 10-Q for FY2021–2024. `note` says why each row is there.
