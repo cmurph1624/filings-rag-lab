@@ -1,0 +1,14 @@
+# Retrieval-only (P2 PR 2): structured@1 + rules scope + rerank-3, as run 615, with questions that name no period scoped to the latest labelled year.
+name = "p2-01-scope-latest-retrieval"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+no_year = "latest"

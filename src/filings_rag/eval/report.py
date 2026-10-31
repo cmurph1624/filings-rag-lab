@@ -410,7 +410,9 @@ def _scoping(heads: list[str], rows: Rows) -> list[str]:
         "## Scoping",
         "",
         "How each question's search was narrowed before retrieval. *Filings*: the company's "
-        "filings for the periods the question names. *Company*: no filing matched the periods, "
+        "filings for the periods the question names. *Latest year*: the question names no "
+        "period, so the company's filings from its latest labelled year (`no_year = 'latest'`). "
+        "*Company*: no filing matched the periods, "
         "so all of the company's filings (a fallback). *Whole corpus*: no company found. "
         "*Gold filing in scope*: the question's own filing was searchable (always true for the "
         "whole corpus). Oracle scope searches only the gold filing: an upper bound, not a result.",
@@ -419,6 +421,7 @@ def _scoping(heads: list[str], rows: Rows) -> list[str]:
             heads,
             rows(
                 ("narrowed to filings", count("filings")),
+                ("no period named: latest year", count("latest")),
                 ("fell back to company", count("company")),
                 ("whole corpus", count("corpus")),
                 ("oracle", count("oracle")),

@@ -10,7 +10,11 @@ from filings_rag.retrieve.factory import make_retriever
 
 ROOT = Path(__file__).resolve().parents[1]
 # Prompts are versioned: editing one in place changes results under the same name.
-PINNED = {"answer@1": "6def313c45d7a981", "answer@2": "bb30e8c3aa0ce6e2"}
+PINNED = {
+    "answer@1": "6def313c45d7a981",
+    "answer@2": "bb30e8c3aa0ce6e2",
+    "answer@3": "f531bf0821b3ee1f",
+}
 PINNED_JUDGE = {"judge@1": "d22124b2220d1927"}
 
 
@@ -135,3 +139,15 @@ def test_default_corpus_keeps_p0_hashes_and_others_are_hashed() -> None:
     assert distractors.corpus == "fb-distractors@1" and distractors.hash != implicit.hash
     with pytest.raises(ValueError, match="unknown corpus"):
         from_dict({**base(), "corpus": "fb-gold"})  # versions are explicit
+
+
+def test_answer3_shows_the_period_a_filing_covers() -> None:
+    hits = [
+        Hit(1, "ULTABEAUTY_2023_10K", 30, 0.8, "x"),
+        Hit(2, "ULTABEAUTY_2023Q4_EARNINGS", 1, 0.7, "y"),
+    ]
+    p = get_prompt("answer@3")
+    assert p.uses_periods and not get_prompt("answer@1").uses_periods
+    out = p.render("q", hits, {"ULTABEAUTY_2023_10K": "fiscal year ended 2023-01-28"})
+    assert "[1] ULTABEAUTY_2023_10K · fiscal year ended 2023-01-28, page 30\nx" in out
+    assert "[2] ULTABEAUTY_2023Q4_EARNINGS, page 1\ny" in out  # no period known: no suffix

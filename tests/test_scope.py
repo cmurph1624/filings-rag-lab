@@ -146,3 +146,55 @@ def test_scalar_years_and_quarters_are_ignored() -> None:
     reply = '{"company": "Boeing", "years": 2023, "quarters": 3}'
     assert S.parse_llm_mentions(reply, ["Boeing"]) == S.Mentions("Boeing", [], [])
     assert S.parse_llm_mentions('{"company": "Boeing", "years": "2023"}', ["Boeing"]).years == []
+
+
+@pytest.mark.parametrize(
+    ("text", "forward"),
+    [
+        ("What production rate changes is Boeing forecasting for FY2023?", True),
+        ("Is growth in JnJ's adjusted EPS expected to accelerate in FY2023?", True),
+        ("Why did Pepsico raise full year guidance for FY2023?", True),
+        ("What was the outlook for 2024?", True),
+        ("What was Boeing's FY2022 revenue?", False),
+        ("Did Pfizer grow its PPNE between FY20 and FY21?", False),
+    ],
+)
+def test_is_forward_looking(text: str, forward: bool) -> None:
+    assert S.is_forward_looking(text) is forward
+
+
+def test_select_lookback_adds_prior_annual_filings_only() -> None:
+    labels = _labels()
+    docs, level = S.select(labels, S.Mentions("Boeing", [2023]), 0, lookback=1)
+    assert level == "filings"
+    assert _names(docs) == ["BA_2022_10K", "BA_2023_10K", "BA_2022Q4_EARNINGS"]
+
+
+def test_select_no_year_latest_takes_the_latest_labelled_year() -> None:
+    labels = _labels()
+    docs, level = S.select(labels, S.Mentions("Boeing"), 0, no_year="latest")
+    assert level == "latest" and _names(docs) == ["BA_2023_10K", "BA_2023Q2_10Q"]
+    docs, level = S.select(labels, S.Mentions("Boeing", [2015]), 0, no_year="latest")
+    assert level == "company"  # a named period that matches nothing still falls back
+
+
+def test_label_offset_shifts_a_doc_label() -> None:
+    d = S.DocLabel.from_doc_name(1, "ULTABEAUTY_2023_10K_2024-02-03", "Ulta Beauty", 1)
+    assert (d.year, d.period) == (2024, "FY")
+
+
+def test_period_options_are_hash_neutral_at_their_off_values() -> None:
+    base = {"kind": "vector", "k": 10}
+    plain = resolve_spec({**base, "scope": {"mode": "rules"}})
+    off = {"forecast_lookback": 0, "no_year": "company", "fiscal_labels": "doc_name"}
+    assert resolve_spec({**base, "scope": {"mode": "rules", **off}}) == plain
+    on = resolve_spec(
+        {**base, "scope": {"mode": "rules", "forecast_lookback": 1, "no_year": "latest"}}
+    )["scope"]
+    assert on == {"mode": "rules", "lookahead": 0, "forecast_lookback": 1, "no_year": "latest"}
+    with pytest.raises(ValueError, match="no_year"):
+        resolve_spec({**base, "scope": {"mode": "rules", "no_year": "all"}})
+    with pytest.raises(ValueError, match="options"):
+        resolve_spec({**base, "scope": {"mode": "oracle", "no_year": "latest"}})
+    with pytest.raises(ValueError, match="forecast_lookback"):
+        resolve_spec({**base, "scope": {"mode": "rules", "forecast_lookback": -1}})
