@@ -8,6 +8,8 @@ from typing import Any
 import psycopg
 
 from filings_rag.eval import retrieval as rmetrics
+from filings_rag.eval.routes import VERSION as ROUTES_VERSION
+from filings_rag.eval.routes import RouteLabel
 from filings_rag.harness.config import from_dict
 from filings_rag.harness.prompts import citations
 from filings_rag.ingest.registry import get_pipeline
@@ -37,6 +39,7 @@ class RunSummary:
     errors: int = 0
     verdicts: Counter[str] = field(default_factory=Counter)
     by_type: dict[str, Counter[str]] = field(default_factory=dict)
+    verdict_of: dict[str, str] = field(default_factory=dict)  # question id -> judged verdict
     retrieval: list[rmetrics.QuestionRetrieval] = field(default_factory=list)
     unlabelled: int = 0
     gen_cost: dict[str, float] = field(default_factory=lambda: dict.fromkeys(COST_VIEWS, 0.0))
@@ -151,8 +154,8 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
             s.retrieve_s.append(ret_s)
         if gen_s is not None and err is None:
             s.generate_s.append(gen_s)
-    for qtype, verdict, model, recorded, *tok in conn.execute(
-        f"SELECT q.question_type, j.verdict, j.model, j.cost_usd, {_TOKENS}"
+    for qid, qtype, verdict, model, recorded, *tok in conn.execute(
+        f"SELECT q.id, q.question_type, j.verdict, j.model, j.cost_usd, {_TOKENS}"
         " FROM judgments j JOIN questions q ON q.id = j.question_id"
         " WHERE j.run_id = %s AND j.judge = %s",
         (run_id, cfg.judge_key or ""),
@@ -160,6 +163,7 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         if verdict is not None:
             s.verdicts[verdict] += 1
             s.by_type[qtype][verdict] += 1
+            s.verdict_of[qid] = verdict
         _add(s.judge_cost, _views(model, Usage(*tok), recorded))
     for gold, scope, aux in conn.execute(
         "SELECT q.doc_name, r.scope, r.aux FROM run_questions r"
@@ -226,8 +230,14 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
-    """Markdown for one or more runs. `retrieval_only` keeps just identity, retrieval, latency."""
+def render(
+    runs: list[RunSummary],
+    *,
+    retrieval_only: bool = False,
+    routes: dict[str, RouteLabel] | None = None,
+) -> str:
+    """Markdown for one or more runs. `retrieval_only` keeps just identity, retrieval, latency.
+    `routes` (hand route labels) adds accuracy by route and by multi-period."""
     heads = [""] + [f"run {s.run_id}" for s in runs]
 
     def rows(*spec: tuple[str, Any]) -> list[list[str]]:
@@ -259,6 +269,8 @@ def render(runs: list[RunSummary], *, retrieval_only: bool = False) -> str:
     ]
     if not retrieval_only:
         out += _answers(runs, heads, rows)
+        if routes:
+            out += _by_route(runs, heads, routes)
     out += _retrieval(runs, heads, rows)
     if any(s.scopes for s in runs):
         out += _scoping(heads, rows)
@@ -325,6 +337,31 @@ def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     )
     out.append("")
     return out
+
+
+def subset_accuracy(s: RunSummary, qids: list[str]) -> str:
+    """Correct over every question in the subset, like headline accuracy."""
+    return _pct(sum(s.verdict_of.get(q) == "correct" for q in qids), len(qids))
+
+
+def _by_route(runs: list[RunSummary], heads: list[str], routes: dict[str, RouteLabel]) -> list[str]:
+    groups: list[tuple[str, list[str]]] = [
+        (f"route: {r}", [q for q, lab in routes.items() if lab.route == r])
+        for r in ("fact", "mixed", "prose")
+    ] + [
+        ("multi-period", [q for q, lab in routes.items() if lab.multi_period]),
+        ("single period", [q for q, lab in routes.items() if not lab.multi_period]),
+    ]
+    body = [
+        [f"{name} ({len(qids)})"] + [_gen(lambda s, q=qids: subset_accuracy(s, q))(s) for s in runs]
+        for name, qids in groups
+    ]
+    return [
+        f"By hand route label (`{ROUTES_VERSION}`, `corpus/route_labels.csv`):",
+        "",
+        _table(["subset"] + heads[1:], body),
+        "",
+    ]
 
 
 def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
