@@ -228,13 +228,13 @@ def facts_get_cmd(
     opts: dict[str, object] = {}
     for kv in option or []:
         k, _, raw = kv.partition("=")
-        opts[k] = lookup.parse_period(raw) if k == "since" else raw
+        opts[k] = raw  # metrics.compute coerces strings to the declared choices
     cmap = concepts.load(CONCEPTS)
     with psycopg.connect(get_settings().database_url) as conn:
-        facts = lookup.FactLookup(
-            conn, cmap, doc_name, lookup.read_offsets(CORPUS / "companies.csv")
-        )
         try:
+            facts = lookup.FactLookup(
+                conn, cmap, doc_name, lookup.read_offsets(CORPUS / "companies.csv")
+            )
             v = metrics.compute(facts, metric, lookup.parse_period(period), **opts)
         except (metrics.MissingInput, ValueError, ZeroDivisionError) as e:
             typer.echo(f"cannot compute: {e}", err=True)

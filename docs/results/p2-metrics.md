@@ -44,6 +44,12 @@ Rules:
   a substitute line. The one exception is the quick ratio's optional short-term investments,
   which count as 0 when none are reported.
 - **Zero denominators** raise an error, not infinity.
+- **Annual-only metrics:** the day-count and average-balance metrics (roa, asset, fixed-asset and
+  inventory turnover, dpo, ccc) raise for a quarter in `metrics@1`. A 3-month flow over a 365-day
+  count, averaged with a year-earlier balance, would be a plausible wrong number. Ratios, margins,
+  items and growth work for quarters.
+- **Option values may be strings** (the CLI, later the router): `--option average=false` matches
+  `False`, and `since=FY2020` is parsed.
 - **Agreement with the concept map:** every metric's required inputs must equal its
   `concepts.toml` entry, and a test checks this.
 

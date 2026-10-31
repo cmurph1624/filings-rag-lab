@@ -8,7 +8,9 @@ option (e.g. `dpo` with `denominator="purchases"`, `inventory_turnover` with `av
 
 - Ratios and margins are fractions (0.135, not 13.5); `unit` says how to show them.
 - Average-balance metrics (roa, asset and fixed-asset turnover, inventory turnover, dio, dso,
-  dpo, ccc) average the period's closing balance with the prior period's.
+  dpo, ccc) average the period's closing balance with the prior year's. They are annual-only
+  (ANNUAL_ONLY): asked for a quarter they raise ValueError instead of mixing spans.
+- Option values may be strings, as from the CLI or a router: "false" matches False.
 - Growth compares with the prior period. CAGR needs `since`, the first period.
 - Missing inputs raise MissingInput, naming the item and period. No metric guesses or
   substitutes a different line, except where an option says so (quick ratio's optional
@@ -19,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from filings_rag.facts.lookup import Fact, Period, period_label
+from filings_rag.facts.lookup import Fact, Period, parse_period, period_label
 
 VERSION = "metrics@1"
 DAYS = 365
@@ -290,6 +292,25 @@ def _cagr(c: _Ctx, p: Period, o: dict[str, Any]) -> tuple[float, str]:
     )
 
 
+# Metrics whose formula assumes a fiscal year: a 365-day count, or a balance averaged with the
+# prior year's. For a quarter they would mix spans (a 3-month flow over 365 days), so they raise
+# rather than return a plausible wrong number. Quarterly versions can come in a later version.
+ANNUAL_ONLY = frozenset(
+    {"roa", "asset_turnover", "fixed_asset_turnover", "inventory_turnover", "dpo", "ccc"}
+)
+
+
+def _coerce(name: str, key: str, given: Any, choices: tuple[Any, ...]) -> Any:
+    """An option value as the metric declares it. Strings (from the CLI or a router) match a
+    choice case-insensitively ("false" -> False); `since` takes a period or its label."""
+    if choices == (None,):  # free-valued: only `since` today
+        return parse_period(given) if isinstance(given, str) else given
+    for c in choices:
+        if c == given or (isinstance(given, str) and str(c).lower() == given.lower()):
+            return c
+    raise ValueError(f"{name} {key} must be one of {[str(c).lower() for c in choices]}")
+
+
 def compute(facts: Facts, name: str, period: Period, **options: Any) -> MetricValue:
     """One metric (or a single item, as itself) for one period."""
     ctx = _Ctx(facts)
@@ -297,13 +318,17 @@ def compute(facts: Facts, name: str, period: Period, **options: Any) -> MetricVa
         value = ctx.v(name, period)  # a plain statement item
         return MetricValue(name, period, value, "usd", f"{name} {_m(value)}", tuple(ctx.used))
     m = REGISTRY[name]
+    if period[1] is not None and name in ANNUAL_ONLY:
+        raise ValueError(
+            f"{name} is annual-only in {VERSION}: its 365-day count and prior-period average"
+            " don't apply to a quarter"
+        )
     unknown = options.keys() - m.options.keys()
     if unknown:
         raise ValueError(f"{name} has no options {sorted(unknown)}")
-    opts = {k: choices[0] for k, choices in m.options.items()} | options
-    for k, choices in m.options.items():
-        if choices != (None,) and opts[k] not in choices:
-            raise ValueError(f"{name} {k} must be one of {list(choices)}")
+    opts = {k: choices[0] for k, choices in m.options.items()}
+    for k, given in options.items():
+        opts[k] = _coerce(name, k, given, m.options[k])
     value, formula = m.fn(ctx, period, opts)
     return MetricValue(name, period, value, m.unit, formula, tuple(ctx.used))
 

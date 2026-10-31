@@ -173,6 +173,8 @@ class FactLookup:
         return target_end(period, self._ends, self._anchor)
 
     def get(self, item_name: str, period: Period) -> Fact | None:
+        if item_name not in self._cmap.items:
+            raise ValueError(f"unknown metric or item {item_name!r} in {self._cmap.version}")
         item = self._cmap.items[item_name]
         want = self.period_end(period)
         if want is None:

@@ -173,3 +173,38 @@ def test_metrics_match_financebench_gold(
         v = M.compute(facts, name, period, **opts)
     assert v.value == pytest.approx(gold, abs=tol), v.formula
     assert all(f.as_filed for f in v.facts)
+
+
+def test_string_options_are_coerced_to_the_declared_choices() -> None:
+    f = Fake({("net_income", FY22): 10.0, ("total_assets", FY22): 120.0})
+    assert M.compute(f, "roa", FY22, average="false").value == pytest.approx(10 / 120)
+    assert M.compute(f, "roa", FY22, average="FALSE").value == pytest.approx(10 / 120)
+    with pytest.raises(ValueError, match="average must be one of"):
+        M.compute(f, "roa", FY22, average="maybe")
+    g = Fake({("revenue", (2020, None)): 100.0, ("revenue", FY22): 121.0})
+    assert M.compute(g, "revenue_cagr", FY22, since="FY2020").value == pytest.approx(0.1)
+
+
+def test_day_count_and_average_balance_metrics_refuse_quarters() -> None:
+    q2 = (2023, 2)
+    f = Fake({("cogs", q2): 91.0, ("accounts_payable", q2): 10.0, ("operating_income", q2): 1.0,
+              ("revenue", q2): 10.0})  # fmt: skip
+    for name in ("dpo", "ccc", "roa", "inventory_turnover", "asset_turnover"):
+        with pytest.raises(ValueError, match="annual-only"):
+            M.compute(f, name, q2)
+    assert M.compute(f, "operating_margin", q2).value == pytest.approx(0.1)  # ratios are fine
+
+
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_unknown_metric_names_raise_value_error() -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        if (
+            conn.execute("SELECT 1 FROM documents WHERE doc_name = 'AMAZON_2017_10K'").fetchone()
+            is None
+        ):
+            pytest.skip("AMAZON_2017_10K not in documents")
+        facts = FactLookup(
+            conn, CMAP, "AMAZON_2017_10K", read_offsets(ROOT / "corpus" / "companies.csv")
+        )
+        with pytest.raises(ValueError, match="unknown metric or item 'dpoo'"):
+            M.compute(facts, "dpoo", (2017, None))
