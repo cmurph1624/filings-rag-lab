@@ -208,3 +208,20 @@ def test_unknown_metric_names_raise_value_error() -> None:
         )
         with pytest.raises(ValueError, match="unknown metric or item 'dpoo'"):
             M.compute(facts, "dpoo", (2017, None))
+
+
+def test_cagr_refuses_mixed_spans() -> None:
+    f = Fake(
+        {
+            ("revenue", (2020, None)): 100.0,
+            ("revenue", (2023, 2)): 30.0,
+            ("revenue", (2020, 2)): 25.0,
+        }
+    )
+    with pytest.raises(ValueError, match="like spans"):
+        M.compute(f, "revenue_cagr", (2023, 2), since=(2020, None))
+    with pytest.raises(ValueError, match="like spans"):
+        M.compute(f, "revenue_cagr", (2023, 2), since=(2020, 3))
+    assert M.compute(f, "revenue_cagr", (2023, 2), since=(2020, 2)).value == pytest.approx(
+        1.2 ** (1 / 3) - 1
+    )

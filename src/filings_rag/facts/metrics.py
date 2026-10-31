@@ -284,6 +284,8 @@ def _cagr(c: _Ctx, p: Period, o: dict[str, Any]) -> tuple[float, str]:
     since = o["since"]
     if since is None or since[0] >= p[0]:
         raise ValueError("revenue_cagr needs `since`, a period before the end period")
+    if since[1] != p[1]:
+        raise ValueError("revenue_cagr compares like spans: both annual or the same quarter")
     years = p[0] - since[0]
     end, start = c.v("revenue", p), c.v("revenue", since)
     return (
