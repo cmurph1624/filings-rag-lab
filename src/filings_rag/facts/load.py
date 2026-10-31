@@ -62,4 +62,6 @@ def load_company(
             for row in fact_rows(cik, companyfacts):
                 copy.write_row(row)
                 n += 1
+        if n == 0:  # an error or truncated body: roll back the delete, keep the last load
+            raise ValueError(f"CIK {cik}: companyfacts has no usable facts; keeping existing rows")
     return LoadStats(cik, n, total - n)

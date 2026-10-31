@@ -95,3 +95,57 @@ def test_load_company_replaces_a_companys_rows() -> None:
         finally:
             conn.execute("DELETE FROM xbrl_facts WHERE cik = %s", (cik,))
             conn.commit()
+
+
+def test_find_respects_the_accession_filter_and_concept_order() -> None:
+    cmap = concepts.load(CONCEPTS)
+    inv = cmap.items["inventory"]  # InventoryNet before RetailRelatedInventoryMerchandise
+    end = date(2019, 2, 2)
+    facts = {
+        "RetailRelatedInventoryMerchandise": [("GOLD", None, end, 1.0)],
+        "InventoryNet": [("OTHER", None, end, 2.0), ("GOLD", None, end, 3.0)],
+    }
+    assert coverage.find(facts, inv, None, end, {"GOLD"}) == ("InventoryNet", 3.0)
+    only_other = {"InventoryNet": [("OTHER", None, end, 2.0)]}
+    assert coverage.find(only_other, inv, None, end, {"GOLD"}) is None
+    assert coverage.find(only_other, inv, None, end, None) == ("InventoryNet", 2.0)
+
+
+def test_question_status_from_its_checks() -> None:
+    def q(*statuses: str) -> coverage.QuestionCoverage:
+        qc = coverage.QuestionCoverage("q", "fact", ("dpo",), "D", True)
+        qc.checks = [coverage.ItemCheck("x", "FY2020", s) for s in statuses]
+        return qc
+
+    assert q("gold", "gold").status == "gold"
+    assert q("gold", "other").status == "other"
+    assert q("gold", "other", "missing").status == "missing"
+
+
+def test_period_end_dates_prefer_the_benchmark_doc_on_a_collision() -> None:
+    docs = [
+        ("ULTABEAUTY_2022_10K", date(2023, 2, 4), False),  # distractor, shifted onto FY2023
+        ("ULTABEAUTY_2023_10K", date(2023, 1, 28), True),
+    ]
+    for order in (docs, docs[::-1]):
+        assert coverage.period_end_dates(order, 1)[(2023, None)] == date(2023, 1, 28)
+
+
+def test_printed_forms() -> None:
+    assert {"5,409", "5409"} <= coverage.printed_forms(5_409_000_000)
+    assert "3,142,308" in coverage.printed_forms(3_142_308_000)  # a filer reporting thousands
+
+
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_an_empty_payload_keeps_the_previous_load() -> None:
+    cik = 999_999_902  # zz fixture
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        try:
+            facts_load.load_company(conn, cik, companyfacts())
+            with pytest.raises(ValueError, match="no usable facts"):
+                facts_load.load_company(conn, cik, {"facts": {}})
+            n = conn.execute("SELECT count(*) FROM xbrl_facts WHERE cik = %s", (cik,)).fetchone()
+            assert n == (1,)
+        finally:
+            conn.execute("DELETE FROM xbrl_facts WHERE cik = %s", (cik,))
+            conn.commit()

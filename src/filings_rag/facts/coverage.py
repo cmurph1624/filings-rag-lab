@@ -13,6 +13,7 @@ company, e.g. when the gold document is an earnings release with no XBRL), or "m
 """
 
 import csv
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -77,9 +78,11 @@ def period_end_dates(
     docs: list[tuple[str, date, bool]], offset: int
 ) -> dict[tuple[int, int | None], date]:
     """(year, quarter or None) -> period end, from (doc_name, period_end, is_benchmark_doc)
-    for one company's 10-K and 10-Q filings."""
+    for one company's 10-K and 10-Q filings. When two filings get the same label, the
+    benchmark document wins, then the earlier period end, so the result doesn't depend on row
+    order."""
     out: dict[tuple[int, int | None], date] = {}
-    for name, end, benchmark in docs:
+    for name, end, benchmark in sorted(docs, key=lambda d: (not d[2], d[1], d[0])):
         ref = parse_doc_name(name)
         year = ref.fiscal_year + (0 if benchmark else offset)
         quarter = None if ref.fiscal_period == "FY" else int(ref.fiscal_period[1])
@@ -141,7 +144,7 @@ def check(
         offsets = {int(r["cik"]): int(r.get("label_offset") or 0) for r in csv.DictReader(fh)}
     benchmark = {r[0] for r in conn.execute("SELECT doc_name FROM benchmark_docs")}
     docs = conn.execute(
-        "SELECT doc_name, cik, accession, form_type, period_end FROM documents"
+        "SELECT doc_name, cik, accession, form_type, period_end FROM documents ORDER BY doc_name"
     ).fetchall()
     by_name = {d[0]: d for d in docs}
     gold_of = dict(conn.execute("SELECT id, doc_name FROM questions").fetchall())
@@ -227,4 +230,65 @@ def render(results: list[QuestionCoverage], version: str) -> str:
             f"| {r.question_id[16:]} | {r.route} | {doc} | {', '.join(r.metrics)} | {r.status}"
             f" | {'; '.join(gaps) or '–'} |"
         )
+    return "\n".join(lines) + "\n"
+
+
+# --- value check -----------------------------------------------------------------------------
+
+
+def printed_forms(value: float) -> set[str]:
+    """How a statement might print a value: in millions or thousands, with or without commas,
+    rounded or to one decimal."""
+    out: set[str] = set()
+    for div in (1e6, 1e3):
+        x = abs(value) / div
+        if x >= 1:
+            out |= {f"{round(x):,}", str(round(x)), f"{x:,.1f}"}
+    return out
+
+
+@dataclass(frozen=True)
+class Verification:
+    found: int
+    total: int
+    unquoted: list[tuple[str, ItemCheck]]  # (question id, check) whose value isn't in the text
+
+
+def verify(conn: psycopg.Connection[Any], results: list[QuestionCoverage]) -> Verification:
+    """Is each matched value printed in the question's FinanceBench evidence or justification?
+    A value that isn't can still be right (an evidence page that quotes components, or a
+    qualitative question whose evidence quotes no figures), so the unquoted ones are listed
+    for a hand check, not counted as wrong."""
+    text = {
+        qid: f"{just or ''} {json.dumps(ev)}".replace("\\n", " ")
+        for qid, just, ev in conn.execute("SELECT id, justification, evidence FROM questions")
+    }
+    found, total, unquoted = 0, 0, []
+    for r in results:
+        for c in r.checks:
+            if c.value is None:
+                continue
+            total += 1
+            if any(f in text[r.question_id] for f in printed_forms(c.value)):
+                found += 1
+            else:
+                unquoted.append((r.question_id, c))
+    return Verification(found, total, unquoted)
+
+
+def render_verify(v: Verification) -> str:
+    lines = [
+        "",
+        "## Values in the evidence text (`--verify`)",
+        "",
+        f"{v.found} of {v.total} matched values appear in the question's FinanceBench evidence or"
+        " justification, as statements print them ($M or $K). Unquoted values need a hand check:",
+        "",
+        "| question | item | period | concept | value |",
+        "|---|---|---|---|---|",
+    ]
+    lines += [
+        f"| {q[16:]} | {c.item} | {c.period} | {c.concept} | {c.value:,.0f} |"
+        for q, c in v.unquoted
+    ]
     return "\n".join(lines) + "\n"

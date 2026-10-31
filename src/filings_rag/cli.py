@@ -218,14 +218,18 @@ def facts_load_cmd() -> None:
 @facts_app.command("coverage")
 def facts_coverage_cmd(
     out: str = typer.Option("", help="Also write the markdown to this file"),
+    verify: bool = typer.Option(
+        False, help="Also look for each found value in the question's evidence text"
+    ),
 ) -> None:
     """Are fact and mixed questions' inputs in xbrl_facts, as filed in their gold filing?"""
     cmap = concepts.load(CONCEPTS)
-    labels = routes.load(CORPUS / "route_labels.csv")
+    route_labels = routes.load(CORPUS / "route_labels.csv")
     with psycopg.connect(get_settings().database_url) as conn:
-        text = coverage.render(
-            coverage.check(conn, labels, cmap, CORPUS / "companies.csv"), cmap.version
-        )
+        results = coverage.check(conn, route_labels, cmap, CORPUS / "companies.csv")
+        text = coverage.render(results, cmap.version)
+        if verify:
+            text += coverage.render_verify(coverage.verify(conn, results))
     if out:
         Path(out).write_text(text)
     typer.echo(text)

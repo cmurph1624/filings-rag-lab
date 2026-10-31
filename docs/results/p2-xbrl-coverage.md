@@ -92,3 +92,14 @@ Fact and mixed questions (`routes@1`): 80.
 | 10285 | fact | BOEING_2018_10K | ppe_net | gold | – |
 | 10420 | fact | AES_2022_10K | roa | gold | – |
 | 10499 | fact | KRAFTHEINZ_2019_10K | inventory_turnover | gold | – |
+
+## Values in the evidence text (`--verify`)
+
+243 of 247 matched values appear in the question's FinanceBench evidence or justification, as statements print them ($M or $K). Unquoted values need a hand check:
+
+| question | item | period | concept | value |
+|---|---|---|---|---|
+| 00552 | debt | FY2022 | LongTermDebt | 49,781,000,000 |
+| 00552 | debt | FY2023 | LongTermDebt | 47,237,000,000 |
+| 00956 | revenue | FY2021 | RevenueFromContractWithCustomerExcludingAssessedTax | 93,775,000,000 |
+| 00956 | revenue | FY2022 | RevenueFromContractWithCustomerExcludingAssessedTax | 94,943,000,000 |

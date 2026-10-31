@@ -16,7 +16,7 @@
 
 ## Concept map (`config/concepts.toml`, `concepts@1`)
 
-- **Items:** 25 statement items, each an ordered list of us-gaap concepts (companies tag the
+- **Items:** 23 statement items, each an ordered list of us-gaap concepts (companies tag the
   same line differently) and a kind: instant for balances, duration for flows.
 - **Metrics:** 28 derived metrics, each with the items it needs.
 - **Validation:** every metric name in `routes@1` must resolve.
@@ -44,7 +44,8 @@ Results:
 The plan's go/no-go bar was about 80%, so **inline XBRL (open decision 1's alternative) isn't
 needed.**
 
-**Values were checked, not just presence.** For 247 matched (item, period) values, the value as
+**Values were checked, not just presence** (`frl facts coverage --verify`, which reproduces this
+and lists the unquoted values). For 247 matched (item, period) values, the value as
 statements print it ($M or $K, with commas) was looked for in the question's FinanceBench
 evidence text and justification:
 
