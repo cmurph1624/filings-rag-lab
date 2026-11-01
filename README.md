@@ -3,11 +3,13 @@
 Open-source research assistant over SEC EDGAR filings (10-K, 10-Q, 8-K), scored publicly against
 [FinanceBench](https://github.com/patronus-ai/financebench) (open subset, 150 questions).
 
-Retrieval is the focus: metadata-scoped hybrid retrieval in Postgres + pgvector, XBRL facts answered
-with SQL, and a router between the two. An experiment harness records every run (pipeline, retriever,
-model, judge) with tokens and API-equivalent cost, and a CI eval gate blocks regressions.
+Retrieval is the focus: metadata-scoped vector retrieval in Postgres + pgvector with a reranker. An
+experiment harness records every run (pipeline, retriever, model, judge) with tokens and
+API-equivalent cost. CI runs lint, type checks and tests on every PR.
 
-Batch work (ingest, embedding, evals) runs locally; the public deployment is on AWS (Terraform-provisioned EC2).
+Not finished yet: a router that answers fact questions from XBRL data with SQL (P2, in progress),
+a CI eval gate that blocks regressions (P3), and a public deployment on AWS (Terraform-provisioned
+EC2, P4). Everything runs locally for now.
 
 ## Status
 
@@ -22,6 +24,10 @@ to 60.7%. Rules-based company/period scoping plus a Voyage reranker lifts it to 
 `structured@1` pipeline (context headers on each chunk) reaches **80.7% (121/150)** on the open
 subset, at $0.025 per correct answer at plain API rates ($0.013 Batch). Hybrid BM25 didn't help.
 See [`docs/results/p1-retrieval.md`](docs/results/p1-retrieval.md).
+
+**P2 in progress: routing.** XBRL company facts are loaded into Postgres with a metrics library on
+top ([`docs/results/p2-xbrl-facts.md`](docs/results/p2-xbrl-facts.md)); the router that sends fact
+questions to SQL is not merged yet.
 
 ## Reproduce
 
