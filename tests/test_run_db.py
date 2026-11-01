@@ -236,6 +236,28 @@ def test_a_usage_pause_stops_judging(conn: psycopg.Connection) -> None:  # type:
     assert (s2.judged, s2.skipped, s2.paused) == (3, 1, None)
 
 
+def test_judging_in_disjoint_shards_judges_each_question_once(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.eval.judge import judge_run
+    from filings_rag.harness.prompts import get_judge_prompt
+
+    c = cfg()
+    rid, _ = run(conn, FakeBackend())
+    qids = [r[0] for r in conn.execute(
+        "SELECT question_id FROM run_questions WHERE run_id = %s ORDER BY 1", (rid,)
+    )]  # fmt: skip
+    prompt = get_judge_prompt("judge@1")
+    j1 = FakeJudge({})
+    s1 = judge_run(conn, rid, c.judge_key, j1, prompt, only={qids[0]}, log=lambda s: None)
+    assert (s1.judged, s1.skipped, j1.calls) == (1, 0, 1)
+    j2 = FakeJudge({})
+    s2 = judge_run(conn, rid, c.judge_key, j2, prompt, only=set(qids), log=lambda s: None)
+    assert (s2.judged, s2.skipped, j2.calls) == (len(qids) - 1, 1, len(qids) - 1)
+    attempts = conn.execute(
+        "SELECT max(attempts), count(*) FROM judgments WHERE run_id = %s", (rid,)
+    ).fetchone()
+    assert attempts == (1, len(qids))
+
+
 def test_resume_refuses_a_different_config(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
     rid = create_run(conn, cfg(), GIT)
     other = from_dict({**cfg().raw, "retriever": {"kind": "vector", "k": 5}})

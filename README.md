@@ -29,6 +29,12 @@ See [`docs/results/p1-retrieval.md`](docs/results/p1-retrieval.md).
 top ([`docs/results/p2-xbrl-facts.md`](docs/results/p2-xbrl-facts.md)); the router that sends fact
 questions to SQL is not merged yet.
 
+**P2 done: routing.** XBRL facts (SEC `companyfacts`) and a metrics library answer fact
+questions deterministically. A router sends them to SQL-computed facts and keeps prose on
+retrieval. That lifts the open subset to **87.3% (131/150)**: fact questions 98.4%, refusals
+10 → 1, at $0.024 per correct answer (plain API). Decomposing multi-period questions helped
+retrieval but not accuracy. See [`docs/results/p2-routing.md`](docs/results/p2-routing.md).
+
 ## Reproduce
 
 Setup is in `CLAUDE.md`. Then:
