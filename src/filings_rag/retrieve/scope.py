@@ -182,6 +182,27 @@ class DocLabel:
         return (self.year, int(self.period[1])) in m.quarters
 
 
+def period_groups(
+    docs: list[DocLabel], m: Mentions, lookahead: int, lookback: int = 0
+) -> list[list[DocLabel]]:
+    """`docs` (a scope's filings) split by the periods `m` names: one group per year (annual
+    filings, with the same lookahead/lookback window as `select`) and per quarter (quarterly
+    filings). Empty and repeated groups are dropped, so a single-period question gets one."""
+    windows = [
+        [d for d in docs if d.period in ANNUAL and y - lookback <= d.year <= y + lookahead]
+        for y in m.years
+    ]
+    quarters = [
+        [d for d in docs if d.period not in ANNUAL and (d.year, int(d.period[1])) == yq]
+        for yq in m.quarters
+    ]
+    out: list[list[DocLabel]] = []
+    for g in windows + quarters:
+        if g and g not in out:
+            out.append(g)
+    return out
+
+
 def select(
     labels: list[DocLabel],
     m: Mentions,
@@ -324,6 +345,9 @@ class Scope:
     documents: list[int]  # `documents` ids to search, a subset of the corpus
     record: dict[str, Any]  # stored on the run row: mode, mentions, level, doc names
     aux: dict[str, Any] | None = None  # {model, usage, cost_usd, cached} when a model was used
+    # `documents` split by mentioned period (one group per year or quarter that has filings in
+    # scope), for decomposed retrieval. Empty unless the scope narrowed to filings.
+    groups: list[list[int]] = field(default_factory=list)
 
 
 class Scoper:
@@ -350,6 +374,7 @@ class Scoper:
 
     def scope(self, question_id: str, question: str) -> Scope:
         aux = None
+        groups: list[list[DocLabel]] = []
         if self.mode == "oracle":
             row = self._conn.execute(
                 "SELECT doc_name FROM questions WHERE id = %s", (question_id,)
@@ -365,13 +390,16 @@ class Scoper:
             else:
                 m = rules_mentions(question, self._patterns)
             forward = bool(self.spec.get("forecast_lookback")) and is_forward_looking(question)
+            lookback = self.spec.get("forecast_lookback", 0) if forward else 0
             docs, level = select(
                 self._labels,
                 m,
                 self.spec.get("lookahead", 0),
-                lookback=self.spec.get("forecast_lookback", 0) if forward else 0,
+                lookback=lookback,
                 no_year=self.spec.get("no_year", "company"),
             )
+            if level == "filings":
+                groups = period_groups(docs, m, self.spec.get("lookahead", 0), lookback)
             mentions = m.to_json()
             if forward:
                 mentions["forward"] = True
@@ -379,7 +407,7 @@ class Scoper:
         if aux and aux.get("parse_error"):
             record["parse_error"] = aux["parse_error"]
         record["docs"] = [d.doc_name for d in docs] if level != "corpus" else []
-        return Scope([d.id for d in docs], record, aux)
+        return Scope([d.id for d in docs], record, aux, [[d.id for d in g] for g in groups])
 
     def _llm(self, question_id: str, question: str) -> tuple[Mentions, dict[str, Any]]:
         """Mentions from the scope model, cached. A reply that won't parse is treated like rules

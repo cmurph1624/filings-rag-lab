@@ -29,6 +29,8 @@ from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, embedding_cost, model_cost
 from filings_rag.retrieve.base import Retrieval, RetrievalError, Retriever
+from filings_rag.retrieve.decompose import merge as merge_retrievals
+from filings_rag.retrieve.factory import resolve_spec
 from filings_rag.retrieve.scope import Scope, Scoper
 from filings_rag.route import facts as route_facts
 from filings_rag.route.plan import RoutePlan
@@ -240,6 +242,9 @@ def execute(
     log: Log = print,
 ) -> RunStats:
     fact_route = facts or (FactRoute(conn) if router is not None else None)
+    resolved_retriever = resolve_spec(cfg.retriever)
+    decompose, k = bool(resolved_retriever.get("decompose")), int(resolved_retriever["k"])
+    decompose_merge = str(resolved_retriever.get("decompose_merge", "round-robin"))
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
     if only is not None:
         todo = [(q, t) for q, t in todo if q in only]
@@ -380,7 +385,15 @@ def execute(
                 assert fact_route is not None
                 route, facts_text = fact_route.run(plan, scope)
             try:
-                retrieval = retriever.retrieve(question, scope.documents if scope else None)
+                if decompose and scope is not None and len(scope.groups) > 1:
+                    scope.record["decomposed"] = len(scope.groups)
+                    retrieval = merge_retrievals(
+                        [retriever.retrieve(question, g) for g in scope.groups],
+                        k,
+                        decompose_merge,
+                    )
+                else:
+                    retrieval = retriever.retrieve(question, scope.documents if scope else None)
             except Exception as e:
                 conn.rollback()
                 # Keep the scope (and any scope-model spend) on the failed row.
