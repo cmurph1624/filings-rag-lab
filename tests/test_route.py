@@ -176,4 +176,26 @@ def test_fact_matches_gold(answer: str, value: float, unit: str, ok: bool) -> No
 
 def test_gold_number_only_for_bare_numbers() -> None:
     assert E.gold_number("Yes, it rose from 20% to 23%") is None
-    assert E.gold_number("$4.60") == (4.6, 2, False)
+    assert E.gold_number("$4.60") == (4.6, 1, False)  # trailing zeros are padding
+    assert E.gold_number("$5466.00") == (5466.0, 0, False)
+    assert E.gold_number("93.86") == (93.86, 2, False)
+
+
+def test_no_relative_tolerance_and_no_stray_scales() -> None:
+    assert not E.fact_matches_gold(5440e6, "usd", (5466.0, 0, False))  # 0.5% off is a miss
+    assert not E.fact_matches_gold(0.28, "x", (28.0, 0, False))  # a ratio isn't a percent
+    assert E.fact_matches_gold(0.28, "pct", (28.0, 0, True))
+
+
+def test_fact_route_never_raises_and_records_the_error() -> None:
+    from filings_rag.harness.run import FactRoute
+    from filings_rag.retrieve.scope import Scope
+
+    class Conn:
+        def rollback(self) -> None:
+            pass
+
+    fr = FactRoute(Conn())  # type: ignore[arg-type]
+    scope = Scope([1], {"level": "filings", "docs": ["NOT-A-DOC-NAME_10K"]})
+    rec, text = fr.run(RoutePlan("fact", ("cash",), (FY(2022),)), scope)
+    assert text == "" and rec["facts"] == [] and "facts_error" in rec

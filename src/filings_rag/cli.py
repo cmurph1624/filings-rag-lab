@@ -316,7 +316,11 @@ def run_cmd(
     config: str = typer.Argument(..., help="Run config, e.g. configs/p0-naive.toml"),
     limit: int | None = typer.Option(None, help="Only the first N questions (by id)"),
     resume: int | None = typer.Option(None, help="Continue this run id"),
-    only: str = typer.Option("", help="Only the question ids listed in this file, one per line"),
+    only: str = typer.Option(
+        "",
+        help="Only the question ids listed in this file, one per line. The run is partial: its"
+        " report shows answered N/150, and a later --resume without --only fills in the rest.",
+    ),
 ) -> None:
     """Answer the question set with one config and record everything in `runs`."""
     cfg = run_config.load(Path(config))
@@ -347,6 +351,16 @@ def run_cmd(
         subset = None
         if only:
             subset = {ln.strip() for ln in Path(only).read_text().splitlines() if ln.strip()}
+            known = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM questions WHERE benchmark = %s", (cfg.questions,)
+                )
+            }
+            if unknown_ids := sorted(subset - known):
+                typer.echo(f"--only lists ids not in {cfg.questions}: {unknown_ids[:5]}", err=True)
+                raise typer.Exit(1)
+            typer.echo(f"partial run: only the {len(subset)} questions in {only}")
         if resume is not None:
             harness.check_resume(conn, resume, cfg)
             run_id = resume

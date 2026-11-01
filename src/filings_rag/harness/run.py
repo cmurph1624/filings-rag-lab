@@ -185,25 +185,29 @@ class FactRoute:
         self._lookups: dict[str, FactLookup] = {}
 
     def run(self, plan: RoutePlan, scope: Scope | None) -> tuple[dict[str, Any], str]:
-        """(route record, Facts section for the prompt)."""
+        """(route record, Facts section for the prompt). Never raises: any failure is recorded
+        as `facts_error` and the question is answered without facts, from the excerpts."""
         anchor = None
-        results: list[route_facts.FactResult] = []
-        rec: dict[str, Any]
-        if plan.route != "prose" and scope is not None and scope.record.get("level") != "corpus":
-            anchor = route_facts.choose_anchor(scope.record.get("docs", []), plan)
-        if anchor is not None:
-            try:
+        try:
+            results: list[route_facts.FactResult] = []
+            if (
+                plan.route != "prose"
+                and scope is not None
+                and scope.record.get("level") != "corpus"
+            ):
+                anchor = route_facts.choose_anchor(scope.record.get("docs", []), plan)
+            if anchor is not None:
                 if anchor not in self._lookups:
                     self._lookups[anchor] = FactLookup(
                         self._conn, self._cmap, anchor, self._offsets
                     )
                 results = route_facts.compute_plan(self._lookups[anchor], plan)
-            except Exception as e:  # no facts this time; the prose path still answers
-                self._conn.rollback()
-                rec = route_facts.record(plan, anchor, [])
-                return rec | {"facts_error": f"{type(e).__name__}: {e}"[:300]}, ""
-        rec = route_facts.record(plan, anchor, results)
-        return rec, route_facts.render_block(anchor, results) if anchor else ""
+            text = route_facts.render_block(anchor, results) if anchor else ""
+            return route_facts.record(plan, anchor, results), text
+        except Exception as e:
+            self._conn.rollback()
+            rec = route_facts.record(plan, anchor, [])
+            return rec | {"facts_error": f"{type(e).__name__}: {e}"[:300]}, ""
 
 
 def document_periods(conn: psycopg.Connection[Any]) -> dict[str, str]:
@@ -235,6 +239,7 @@ def execute(
     only: set[str] | None = None,
     log: Log = print,
 ) -> RunStats:
+    fact_route = facts or (FactRoute(conn) if router is not None else None)
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
     if only is not None:
         todo = [(q, t) for q, t in todo if q in only]
@@ -372,7 +377,8 @@ def execute(
                     conn.rollback()
                     record(None, qid, None, f"route: {type(e).__name__}: {e}")
                     continue
-                route, facts_text = (facts or FactRoute(conn)).run(plan, scope)
+                assert fact_route is not None
+                route, facts_text = fact_route.run(plan, scope)
             try:
                 retrieval = retriever.retrieve(question, scope.documents if scope else None)
             except Exception as e:

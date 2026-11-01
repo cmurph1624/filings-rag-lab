@@ -55,18 +55,21 @@ For the 50 fact-labelled questions whose gold answer is a bare number, the check
 headline computed fact with the gold number. The headline is the average if there is one, else
 the last value. Runs are retrieval-only (no model calls).
 
+- **Strict rounding:** the fact must equal the gold after rounding to the gold's own precision,
+  with no relative tolerance.
+- **Padding:** FinanceBench pads answers to two places, so trailing zeros don't count as
+  precision. "$5466.00" is to the nearest million and "$8.70" to a tenth of a billion.
+- **Scales:** money may be written in $, $M or $B, and a percent metric as a fraction, or as a
+  percent when the gold has a % sign.
+
 | router | run | headline fact = gold |
 |---|---|---|
-| rules | 844 | **46/50** |
-| llm | 845 | 42/50 |
+| rules | 844 | **48/50** |
+| llm | 845 | 44/50 |
 
-The four `rules` misses are not wrong facts:
-
-- **Two-step answers:** 03620 (EBITDA less capex) and 04784 (change in operating margin) need
-  the generator to subtract two facts, and both facts are given.
-- **Gold rounding:** 04980 and 05718 are FinanceBench rounding. PepsiCo's FY2021 capex is
-  $4,625M against the gold's "$4.60" billion, and American Water's FY2020 dividends are $389M
-  against "$0.40" billion.
+The two `rules` misses are two-step answers, and the generator gets both inputs: 03620 (EBITDA
+less capex: EBITDA and capex are both facts) and 04784 (the change in operating margin: both
+years' margins are facts).
 
 The `llm` router's four extra misses are a scoring artifact. It lists inputs after the metric,
 so the "headline" becomes an input (inventory, total assets) rather than DPO or ROA.

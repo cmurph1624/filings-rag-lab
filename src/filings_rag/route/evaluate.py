@@ -80,19 +80,26 @@ def gold_number(answer: str) -> tuple[float, int, bool] | None:
     raw = m[0].replace("$", "").replace(",", "").replace(" ", "")
     pct = raw.endswith("%")
     raw = raw.rstrip("%")
-    decimals = len(raw.split(".")[1]) if "." in raw else 0
+    # FinanceBench pads answers to two places ("$5409.00", "$8.70"), so trailing zeros carry
+    # no precision: "$5409.00" is to the nearest unit, "$8.70" to one decimal.
+    decimals = len(raw.split(".")[1].rstrip("0")) if "." in raw else 0
     return float(raw), decimals, pct
 
 
 def fact_matches_gold(value: float, unit: str, gold: tuple[float, int, bool]) -> bool:
-    """Rounded to the gold's precision, the fact equals the gold number in some scale the
-    gold could be written in: % for ratios, $, $M or $B for money, or the plain value."""
-    g, decimals, pct = gold
+    """Rounded to the gold's precision, the fact equals the gold number, in a scale the gold
+    could be written in for the fact's unit: $, $M or $B for money; a fraction or a percent
+    (only when the gold has a % sign) for percent metrics; the plain value otherwise. No
+    relative tolerance: a gold that is itself mis-rounded counts as a miss."""
+    g, decimals, is_pct = gold
     tol = 0.5 * 10**-decimals + 1e-9
-    scales = [100.0] if pct else [1.0, 100.0]
     if unit == "usd":
         scales = [1.0, 1e-6, 1e-9]
-    return any(abs(value * s - g) <= tol or abs(value * s - g) <= 0.005 * abs(g) for s in scales)
+    elif unit == "pct":
+        scales = [100.0] if is_pct else [1.0]
+    else:
+        scales = [1.0]
+    return any(abs(value * s - g) <= tol for s in scales)
 
 
 @dataclass(frozen=True)
