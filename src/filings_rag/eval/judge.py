@@ -87,8 +87,10 @@ def judge_run(
     prompt: JudgePrompt,
     *,
     concurrency: int = 2,
+    only: set[str] | None = None,
     log: Callable[[str], None] = print,
 ) -> JudgeStats:
+    """`only`: judge just these question ids, so disjoint shards can run in parallel."""
     rows = conn.execute(
         "SELECT r.question_id, q.question, q.answer, q.justification, r.answer,"
         "       j.verdict IS NOT NULL"
@@ -100,6 +102,8 @@ def judge_run(
         (judge_key, run_id),
     ).fetchall()
     conn.commit()
+    if only is not None:
+        rows = [r for r in rows if r[0] in only]
     stats = JudgeStats(skipped=sum(1 for *_, done in rows if done))
 
     def record(qid: str, result: Result | None, error: str | None) -> None:

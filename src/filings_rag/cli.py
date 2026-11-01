@@ -401,7 +401,12 @@ def run_cmd(
 
 
 @app.command("judge")
-def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
+def judge_cmd(
+    run_id: int = typer.Argument(..., help="Run to grade"),
+    only: str = typer.Option(
+        "", help="Only these question ids (a file, one per line): disjoint shards run in parallel"
+    ),
+) -> None:
     """Grade a run's answers with the judge pinned in its config (resumable)."""
     with psycopg.connect(get_settings().database_url) as conn:
         row = conn.execute("SELECT config FROM runs WHERE id = %s", (run_id,)).fetchone()
@@ -424,6 +429,9 @@ def judge_cmd(run_id: int = typer.Argument(..., help="Run to grade")) -> None:
             make_backend(cfg.judge_spec),
             get_judge_prompt(cfg.judge["prompt"]),
             concurrency=cfg.execution["concurrency"],
+            only={ln.strip() for ln in Path(only).read_text().splitlines() if ln.strip()}
+            if only
+            else None,
             log=typer.echo,
         )
     typer.echo(
