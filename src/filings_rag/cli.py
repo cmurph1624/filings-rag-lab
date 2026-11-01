@@ -421,6 +421,26 @@ def judge_cmd(
         if cfg.judge is None or cfg.judge_spec is None or cfg.judge_key is None:
             typer.echo(f"run {run_id} has no [judge] (retrieval-only run)", err=True)
             raise typer.Exit(1)
+        shard = None
+        if only:
+            path = Path(only)
+            if not path.is_file():
+                typer.echo(f"--only: no file {only}", err=True)
+                raise typer.Exit(1)
+            shard = {ln.strip() for ln in path.read_text().splitlines() if ln.strip()}
+            answered = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT question_id FROM run_questions"
+                    " WHERE run_id = %s AND answer IS NOT NULL",
+                    (run_id,),
+                )
+            }
+            if not shard or not (shard & answered):
+                typer.echo(f"--only: no answered question of run {run_id} in {only}", err=True)
+                raise typer.Exit(1)
+            if missing := sorted(shard - answered):
+                typer.echo(f"--only: {len(missing)} ids have no answer in run {run_id}", err=True)
         typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
         s = judging.judge_run(
             conn,
@@ -429,9 +449,7 @@ def judge_cmd(
             make_backend(cfg.judge_spec),
             get_judge_prompt(cfg.judge["prompt"]),
             concurrency=cfg.execution["concurrency"],
-            only={ln.strip() for ln in Path(only).read_text().splitlines() if ln.strip()}
-            if only
-            else None,
+            only=shard,
             log=typer.echo,
         )
     typer.echo(
