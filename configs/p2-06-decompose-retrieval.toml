@@ -1,0 +1,16 @@
+# Retrieval-only (P2 PR 6): run 698 (structured@1 + rules scope with lookback and FinanceBench
+# labels + rerank-3) plus decompose: one retrieval per period the question names, merged.
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+decompose = true
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"

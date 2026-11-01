@@ -38,7 +38,7 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
     kind = spec.get("kind")
     if kind not in DEFAULTS:
         raise ValueError(f"unknown retriever kind {kind!r}; known: {sorted(DEFAULTS)}")
-    opts = {k: v for k, v in spec.items() if k not in ("kind", "scope", "rerank")}
+    opts = {k: v for k, v in spec.items() if k not in ("kind", "scope", "rerank", "decompose")}
     unknown = opts.keys() - DEFAULTS[kind].keys()
     if unknown:
         raise ValueError(f"unknown {kind} retriever options: {sorted(unknown)}")
@@ -61,6 +61,13 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if kind == "hybrid" and resolved["candidates"] < resolved["rerank"]["candidates"]:
             # the hybrid returns at most its own candidates, which the reranker then reads
             raise ValueError("hybrid candidates must be at least the rerank candidates")
+    decompose = spec.get("decompose", False)
+    if not isinstance(decompose, bool):
+        raise ValueError("decompose must be true or false")
+    if decompose:  # off adds nothing, so configs without it keep their hashes
+        if scope is None:
+            raise ValueError("decompose needs [retriever.scope]: it splits the scope by period")
+        resolved["decompose"] = True
     return {"kind": kind, **resolved}
 
 
@@ -85,10 +92,11 @@ def make_retriever(
     if rr is not None and reranker is not None:
         if reranker.name != rr["model"]:
             raise ValueError(f"reranker is {reranker.name}, config says {rr['model']}")
-        base_spec = {k: v for k, v in spec.items() if k != "rerank"} | {"k": rr["candidates"]}
+        base_spec = {k: v for k, v in spec.items() if k not in ("rerank", "decompose")}
+        base_spec |= {"k": rr["candidates"]}
         base = make_retriever(conn, base_spec, table, embedder, documents)
         return RerankingRetriever(base, reranker, k=resolved["k"])
-    opts = {k: v for k, v in resolved.items() if k not in ("kind", "scope")}
+    opts = {k: v for k, v in resolved.items() if k not in ("kind", "scope", "decompose")}
     text_opts = {o: opts[o] for o in ("ranking", "k1", "b") if o in opts}
     if resolved["kind"] == "text":
         return TextRetriever(conn, table, k=opts["k"], documents=documents, **text_opts)
