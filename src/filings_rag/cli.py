@@ -27,6 +27,8 @@ from filings_rag.pricing import embedding_cost
 from filings_rag.rerank.factory import make_reranker
 from filings_rag.retrieve.factory import make_retriever, resolve_spec
 from filings_rag.retrieve.scope import make_scoper
+from filings_rag.route import evaluate as route_eval
+from filings_rag.route.router import make_router
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -43,6 +45,8 @@ ingest_app = typer.Typer(no_args_is_help=True, help="Ingest pipelines")
 app.add_typer(ingest_app, name="ingest")
 facts_app = typer.Typer(no_args_is_help=True, help="XBRL facts")
 app.add_typer(facts_app, name="facts")
+route_app = typer.Typer(no_args_is_help=True, help="Query routing")
+app.add_typer(route_app, name="route")
 CONCEPTS = ROOT / "config" / "concepts.toml"
 
 
@@ -248,6 +252,45 @@ def facts_get_cmd(
         )
 
 
+@route_app.command("eval")
+def route_eval_cmd(
+    mode: str = typer.Option("rules", help="rules | llm"),
+    model: str = typer.Option("", help="llm mode: the model (default claude-haiku-5-5)"),
+) -> None:
+    """Score a router against the hand route labels (routes@1), without generation."""
+    spec: dict[str, object] = {"mode": mode}
+    if model:
+        spec["model"] = model
+    labels = routes.load(CORPUS / "route_labels.csv")
+    with psycopg.connect(get_settings().database_url) as conn:
+        router = make_router(conn, spec)
+        assert router is not None
+        questions: dict[str, str] = dict(
+            conn.execute("SELECT id, question FROM questions").fetchall()
+        )
+        scores, cost = [], 0.0
+        for qid in sorted(labels):
+            plan, aux = router.route(qid, questions[qid])
+            cost += float(aux["cost_usd"]) if aux else 0.0
+            scores.append(route_eval.RouteScore(qid, labels[qid], plan))
+    typer.echo(f"router {router.spec}; model spend ${cost:.4f} (API-equivalent)")
+    typer.echo(route_eval.summarize(scores))
+
+
+@route_app.command("facts")
+def route_facts_cmd(run_id: int = typer.Argument(..., help="A run made with a [router]")) -> None:
+    """Judge-free fact-route accuracy: for fact-labelled questions whose gold answer is a bare
+    number, does the headline computed fact equal it?"""
+    labels = routes.load(CORPUS / "route_labels.csv")
+    with psycopg.connect(get_settings().database_url) as conn:
+        checks = route_eval.fact_route_accuracy(conn, run_id, labels)
+    ok = sum(c.ok for c in checks)
+    typer.echo(f"run {run_id}: {ok}/{len(checks)} headline facts equal the gold number")
+    for c in checks:
+        if not c.ok:
+            typer.echo(f"  {c.question_id[16:]}  gold {c.gold}  fact {c.shown or '–'}")
+
+
 @facts_app.command("coverage")
 def facts_coverage_cmd(
     out: str = typer.Option("", help="Also write the markdown to this file"),
@@ -273,6 +316,11 @@ def run_cmd(
     config: str = typer.Argument(..., help="Run config, e.g. configs/p0-naive.toml"),
     limit: int | None = typer.Option(None, help="Only the first N questions (by id)"),
     resume: int | None = typer.Option(None, help="Continue this run id"),
+    only: str = typer.Option(
+        "",
+        help="Only the question ids listed in this file, one per line. The run is partial: its"
+        " report shows answered N/150, and a later --resume without --only fills in the rest.",
+    ),
 ) -> None:
     """Answer the question set with one config and record everything in `runs`."""
     cfg = run_config.load(Path(config))
@@ -296,6 +344,23 @@ def run_cmd(
         spec = cfg.backend_spec
         backend = make_backend(spec) if spec else None  # None: retrieval-only run
         prompt = get_prompt(cfg.generation["prompt"]) if cfg.generation else None
+        router = make_router(conn, cfg.router)
+        if router is not None and scoper is None:
+            typer.echo("[router] needs [retriever.scope]: facts anchor on the scope", err=True)
+            raise typer.Exit(1)
+        subset = None
+        if only:
+            subset = {ln.strip() for ln in Path(only).read_text().splitlines() if ln.strip()}
+            known = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM questions WHERE benchmark = %s", (cfg.questions,)
+                )
+            }
+            if unknown_ids := sorted(subset - known):
+                typer.echo(f"--only lists ids not in {cfg.questions}: {unknown_ids[:5]}", err=True)
+                raise typer.Exit(1)
+            typer.echo(f"partial run: only the {len(subset)} questions in {only}")
         if resume is not None:
             harness.check_resume(conn, resume, cfg)
             run_id = resume
@@ -311,7 +376,9 @@ def run_cmd(
             prompt,
             git,
             scoper=scoper,
+            router=router,
             limit=limit,
+            only=subset,
             log=typer.echo,
         )
     u = s.usage

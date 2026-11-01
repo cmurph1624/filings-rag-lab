@@ -1,0 +1,20 @@
+# Retrieval-only (P2 PR 5): run 698's retrieval (structured@1 + rules scope with lookback and
+# FinanceBench labels + rerank-3) plus the rules router. No model calls: the run records each
+# question's route plan and the facts the fact route computes, for checking against gold.
+name = "p2-03-router-rules-retrieval"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
