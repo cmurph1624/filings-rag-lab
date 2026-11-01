@@ -38,7 +38,11 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
     kind = spec.get("kind")
     if kind not in DEFAULTS:
         raise ValueError(f"unknown retriever kind {kind!r}; known: {sorted(DEFAULTS)}")
-    opts = {k: v for k, v in spec.items() if k not in ("kind", "scope", "rerank", "decompose")}
+    opts = {
+        k: v
+        for k, v in spec.items()
+        if k not in ("kind", "scope", "rerank", "decompose", "decompose_merge")
+    }
     unknown = opts.keys() - DEFAULTS[kind].keys()
     if unknown:
         raise ValueError(f"unknown {kind} retriever options: {sorted(unknown)}")
@@ -68,6 +72,13 @@ def resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if scope is None:
             raise ValueError("decompose needs [retriever.scope]: it splits the scope by period")
         resolved["decompose"] = True
+    merge = spec.get("decompose_merge", "round-robin")
+    if merge not in ("round-robin", "score"):
+        raise ValueError("decompose_merge must be round-robin or score")
+    if merge != "round-robin":  # the default adds nothing to the hash
+        if not decompose:
+            raise ValueError("decompose_merge needs decompose = true")
+        resolved["decompose_merge"] = merge
     return {"kind": kind, **resolved}
 
 
@@ -92,11 +103,17 @@ def make_retriever(
     if rr is not None and reranker is not None:
         if reranker.name != rr["model"]:
             raise ValueError(f"reranker is {reranker.name}, config says {rr['model']}")
-        base_spec = {k: v for k, v in spec.items() if k not in ("rerank", "decompose")}
+        base_spec = {
+            k: v for k, v in spec.items() if k not in ("rerank", "decompose", "decompose_merge")
+        }
         base_spec |= {"k": rr["candidates"]}
         base = make_retriever(conn, base_spec, table, embedder, documents)
         return RerankingRetriever(base, reranker, k=resolved["k"])
-    opts = {k: v for k, v in resolved.items() if k not in ("kind", "scope", "decompose")}
+    opts = {
+        k: v
+        for k, v in resolved.items()
+        if k not in ("kind", "scope", "decompose", "decompose_merge")
+    }
     text_opts = {o: opts[o] for o in ("ranking", "k1", "b") if o in opts}
     if resolved["kind"] == "text":
         return TextRetriever(conn, table, k=opts["k"], documents=documents, **text_opts)

@@ -244,6 +244,7 @@ def execute(
     fact_route = facts or (FactRoute(conn) if router is not None else None)
     resolved_retriever = resolve_spec(cfg.retriever)
     decompose, k = bool(resolved_retriever.get("decompose")), int(resolved_retriever["k"])
+    decompose_merge = str(resolved_retriever.get("decompose_merge", "round-robin"))
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
     if only is not None:
         todo = [(q, t) for q, t in todo if q in only]
@@ -387,7 +388,9 @@ def execute(
                 if decompose and scope is not None and len(scope.groups) > 1:
                     scope.record["decomposed"] = len(scope.groups)
                     retrieval = merge_retrievals(
-                        [retriever.retrieve(question, g) for g in scope.groups], k
+                        [retriever.retrieve(question, g) for g in scope.groups],
+                        k,
+                        decompose_merge,
                     )
                 else:
                     retrieval = retriever.retrieve(question, scope.documents if scope else None)
