@@ -1,0 +1,34 @@
+# Full run (P2 PR 5): run 698's retrieval (structured@1 + rules scope with lookback and
+# FinanceBench labels + rerank-3), the llm router (Haiku, route@1), and answer@4 (a Facts section computed from
+# XBRL ahead of the excerpts). PR 5 smoke-runs it on the 63 fact-labelled questions (--only).
+name = "p2-04-router-llm-facts"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "llm"
+
+[generation]
+backend = "claude-cli"
+model = "claude-sonnet-5-5"
+prompt = "answer@4"
+
+[judge]  # stronger than the generator, pinned per run
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5
