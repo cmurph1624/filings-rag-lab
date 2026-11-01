@@ -1,5 +1,6 @@
 # Retrieval-only (P2 PR 6): run 698 (structured@1 + rules scope with lookback and FinanceBench
 # labels + rerank-3) plus decompose: one retrieval per period the question names, merged.
+name = "p2-06-decompose-retrieval"
 pipeline = "structured@1"
 questions = "financebench-open"
 corpus = "fb-distractors@1"
