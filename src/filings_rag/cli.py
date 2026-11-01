@@ -406,6 +406,11 @@ def judge_cmd(
     only: str = typer.Option(
         "", help="Only these question ids (a file, one per line): disjoint shards run in parallel"
     ),
+    replicate: int = typer.Option(
+        1,
+        help="Judge again as replicate N (>= 2): verdicts are stored under the judge key with"
+        " '#rN', leaving the run's own verdicts untouched. For measuring judge agreement.",
+    ),
 ) -> None:
     """Grade a run's answers with the judge pinned in its config (resumable)."""
     with psycopg.connect(get_settings().database_url) as conn:
@@ -441,11 +446,15 @@ def judge_cmd(
                 raise typer.Exit(1)
             if missing := sorted(shard - answered):
                 typer.echo(f"--only: {len(missing)} ids have no answer in run {run_id}", err=True)
-        typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
+        if replicate < 1:
+            typer.echo("--replicate must be 1 or more", err=True)
+            raise typer.Exit(1)
+        judge_key = cfg.judge_key if replicate == 1 else f"{cfg.judge_key}#r{replicate}"
+        typer.echo(f"run {run_id}: judging with {judge_key}")
         s = judging.judge_run(
             conn,
             run_id,
-            cfg.judge_key,
+            judge_key,
             make_backend(cfg.judge_spec),
             get_judge_prompt(cfg.judge["prompt"]),
             concurrency=cfg.execution["concurrency"],
