@@ -46,8 +46,49 @@ run's config sets `gpu_usd_per_hour`: wall time from the run's start to its fini
 rate, plus the other models (embedding, reranker, scope) at plain API cost. A run resumed after
 a pause includes the gap, so it assumes the pod stayed rented.
 
-## Smoke runs: not done in this PR
+## Smoke run: Qwen on a rented 4090 (2026-11-02, run 1380)
 
-`configs/p3-smoke-openai.toml` and `configs/p3-smoke-qwen.toml` are the 5-question smoke
-configs (`frl run <config> --only <file>`). They need an `OPENAI_API_KEY` (not in `.env`) and a
-rented pod (`lab up --serve vllm`, then `lab down`), which costs money, so they wait for an OK.
+`configs/p3-smoke-qwen.toml`, the first 5 questions (`frl run ... --limit 5`), then `frl judge`.
+Plumbing check, not a result.
+
+- **It works end to end.** 5 answered, 0 failed, generation 8–18 s per question (60.6 s in
+  total at concurrency 2, 681 output tokens), judged and reported. Token views cost it at $0 as
+  designed.
+- **Answers match the Sonnet run (846) on 4 of 5.** The difference is 00005 (Corning working
+  capital), the question `p3-noise.md` already found unstable because its gold is debatable.
+- **What the pod cost:** one RTX 4090 at $0.89/hr (RunPod Secure Cloud; the lab README's $0.74
+  is out of date) for about 40 minutes, roughly $0.60. Most of that was getting a server up,
+  not answering.
+- **GPU-hour rows read "–" for this run.** `runs.finished_at` is only set when a run covers the
+  whole question set, and `--limit 5` doesn't. PR 7's full runs get the rows; a partial run
+  can't.
+
+### Getting Qwen3.6-27B onto a 24 GB card (for PR 7)
+
+- **RunPod had no 4090 in EU-RO-1 at the first try**, and it was free on the second, ten
+  minutes later. The volume pins the data center, so there is no other place to look.
+- **Pick the build by its safetensors size, not its model card.** `88plug/Qwen3.6-27B-W4A16`
+  says "14 GB" and "fits 24 GB"; it is 25.9 GB and ran out of memory while building the LM head
+  (vLLM 0.33.0). The 4-bit builds of this model are 18.7–22 GB: `Alennnndy/Qwen3.6-27B-AWQ-4bit`
+  (18.7), `Lorbus/Qwen3.6-27B-int4-AutoRound` (19.0, needs `--trust-remote-code`),
+  `cyankiwi/Qwen3.6-27B-AWQ-INT4` (20.4), `QuantTrio/Qwen3.6-27B-AWQ` (21.9).
+- **The one that served:** `Alennnndy/Qwen3.6-27B-AWQ-4bit`, with
+  `VLLM_MAX_MODEL_LEN=24576 VLLM_DOWNLOAD_DIR=/root/hf VLLM_EXTRA_ARGS="--language-model-only
+  --kv-cache-dtype fp8 --enforce-eager --max-num-seqs 2 --gpu-memory-utilization 0.95
+  --enable-prefix-caching --reasoning-parser qwen3" lab up --serve vllm --model
+  Alennnndy/Qwen3.6-27B-AWQ-4bit`. It was serving about 4 minutes after launch, download
+  included. `--max-num-seqs 2` means PR 7's `concurrency` should be 2 for this model.
+- **Weights go on the container disk** (`VLLM_DOWNLOAD_DIR=/root/hf`): the 50 GB network volume
+  already holds 28 GB of Ollama models and 15 GB of Qwen2.5-7B, and the download died with
+  `Disk quota exceeded`. The container disk is wiped on `lab down`, so each pod re-downloads
+  18.7 GB (a few minutes).
+- **The served name is the HF id's basename** (`Qwen3.6-27B-AWQ-4bit`), so the run config's
+  `model` and a `prices.toml` entry use that name.
+- **The server crashed silently into `/workspace/vllm.log`** each time; `lab up` reported
+  success because the bootstrap only starts it. Read the log (`ssh ... tail /workspace/vllm.log`)
+  rather than waiting.
+
+### Still not done
+
+The OpenAI smoke run (`configs/p3-smoke-openai.toml`): there is no `OPENAI_API_KEY` in `.env`,
+and it was skipped on 2026-11-02 at the user's request.
