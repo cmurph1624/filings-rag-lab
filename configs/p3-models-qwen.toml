@@ -1,0 +1,39 @@
+# P3 PR 7: run 846's config (p2-04-router-rules-facts) with only the answering model changed
+# (Qwen3.6-27B, 4-bit, on a rented RTX 4090). Same retrieval, router, prompt (answer@4) and pinned judge, so the runs differ by
+# generator alone. Results: docs/results/p3-models.md.
+name = "p3-models-qwen"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[generation]
+backend = "openai-compatible"
+# Served name of the 4-bit AWQ build on the pod; setup in docs/results/p3-backends.md.
+model = "Qwen3.6-27B-AWQ-4bit"
+base_url = "http://open-model-lab:8000/v1"   # the pod on the tailnet
+gpu_usd_per_hour = 0.89                      # RTX 4090, RunPod Secure Cloud, 2026-11-02
+max_tokens = 4000
+extra_body = { chat_template_kwargs = { enable_thinking = false } }
+prompt = "answer@4"
+
+[judge]  # stronger than the generator, pinned per run
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5
