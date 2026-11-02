@@ -1,0 +1,38 @@
+# Answer-level eval (P3 PR 4): add the `eval:full` label to a PR to run run 846's config at
+# the PR's code (generation + Opus judge, claude-cli under the usage governor) on the
+# self-hosted runner, and post the report against run 846. Takes about an hour.
+name: eval-full
+on:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: eval-full-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    # Same guard as eval-gate: PR code runs on the Nucbox. The label also needs write access.
+    if: >-
+      github.event.label.name == 'eval:full' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, nucbox, frl]
+    timeout-minutes: 600
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Answer eval
+        run: scripts/ci_eval_full.sh "$RUNNER_TEMP/report.md"
+      - name: Post the report on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          f="$RUNNER_TEMP/report.md"
+          [ -s "$f" ] || echo "## Answer eval: ERROR — no report; see the job log." > "$f"
+          printf '\n_[job log](%s/%s/actions/runs/%s)_\n<!-- frl-eval-full -->\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$f"
+          gh pr comment "$PR" --body-file "$f"
