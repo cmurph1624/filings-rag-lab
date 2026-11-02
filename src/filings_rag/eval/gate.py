@@ -6,6 +6,10 @@ current code. Metrics are computed over the baseline's scored questions. A quest
 candidate can't score (its pipeline's chunks don't hold the evidence any more) counts as
 evidence not found: dropping it instead would let a broken chunker raise recall by shrinking
 the pool.
+
+recall@k favours bigger chunks (more text per chunk holds evidence more often), so the verdict
+also shows how many words of context each run retrieves, and flags a candidate that retrieves
+much more: its recall gain may not be a better system, and it needs an answer eval.
 """
 
 import tomllib
@@ -14,13 +18,16 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
 from filings_rag.eval import retrieval as rmetrics
 from filings_rag.eval.routes import RouteLabel
 from filings_rag.harness.config import from_dict
+from filings_rag.harness.run import pipeline_index
 from filings_rag.route import evaluate as route_eval
 
 METRICS = ("recall_at_10", "hit_at_10", "mrr", "fact_correct")
+MORE_CONTEXT = 1.25  # flag a candidate retrieving this much more text than the baseline
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,7 @@ class Measured:
     pipeline: str
     retrieval: dict[str, rmetrics.QuestionRetrieval]
     facts: dict[str, bool] | None  # question id -> judge-free fact check ok; None: no router
+    context_words: float = 0.0  # mean words retrieved per question
 
 
 def measure(conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteLabel]) -> Measured:
@@ -72,7 +80,19 @@ def measure(conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteL
     facts = None
     if cfg.router is not None:
         facts = {c.question_id: c.ok for c in route_eval.fact_route_accuracy(conn, run_id, labels)}
-    return Measured(run_id, cfg.pipeline, {q.question_id: q for q in scored}, facts)
+    table = pipeline_index(conn, cfg.pipeline)[0]
+    words = conn.execute(
+        sql.SQL(
+            r"""SELECT avg(w) FROM (
+                 SELECT r.question_id, sum(array_length(regexp_split_to_array(c.text, '\s+'), 1)) w
+                 FROM run_questions r CROSS JOIN jsonb_array_elements(r.retrieved) h
+                 JOIN {t} c ON c.id = (h->>'chunk_id')::bigint
+                 WHERE r.run_id = %s GROUP BY 1) x"""
+        ).format(t=sql.Identifier(table)),
+        (run_id,),
+    ).fetchone()
+    context = float(words[0]) if words and words[0] is not None else 0.0
+    return Measured(run_id, cfg.pipeline, {q.question_id: q for q in scored}, facts, context)
 
 
 @dataclass(frozen=True)
@@ -164,6 +184,17 @@ def render(results: list[CheckResult], corpus: str) -> str:
                 f" {_fmt(row.metric, row.candidate)} | {change} |"
                 f" {_fmt(row.metric, row.allowed_drop)} | {'ok' if row.ok else '**breach**'} |"
             )
+        bw, cw = r.baseline.context_words, r.candidate.context_words
+        lines += [
+            "",
+            f"Context retrieved per question: baseline {bw:,.0f} words, candidate {cw:,.0f}.",
+        ]
+        if bw and cw > MORE_CONTEXT * bw:
+            lines.append(
+                f"The candidate retrieves {cw / bw:.1f}× the text. recall@k favours bigger"
+                " chunks, so a recall gain here may not mean better answers: run the answer"
+                " eval (`eval:full`) before trusting it."
+            )
         if r.unscored:
             lines += [
                 "",
@@ -174,7 +205,7 @@ def render(results: list[CheckResult], corpus: str) -> str:
             lines += [
                 "",
                 f"Lost evidence from the top 10 ({len(r.lost)}):"
-                " question (baseline rank → candidate rank): "
+                " question (baseline rank → candidate rank, – = not in the top 10): "
                 + ", ".join(f"{q[16:]} ({x} → {y or '–'})" for q, x, y in r.lost[:30]),
             ]
         if r.facts_lost:
