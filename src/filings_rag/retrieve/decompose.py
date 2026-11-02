@@ -43,7 +43,7 @@ def merge(parts: list[Retrieval], k: int, how: str = "round-robin") -> Retrieval
             if component not in aux:
                 aux[component] = dict(spend)
                 continue
-            for key in ("tokens", "cost_usd"):
+            for key in ("tokens", "cost_usd", "cached_tokens"):
                 if key in spend:
                     aux[component][key] = aux[component].get(key, 0) + spend[key]
     return Retrieval(hits[:k], sum(p.embed_tokens for p in parts), parts[0].embedder, aux)

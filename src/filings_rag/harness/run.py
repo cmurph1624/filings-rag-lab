@@ -99,7 +99,8 @@ class RunStats:
     gen_cost: float = 0.0
     embed_cost: float = 0.0
     reported_cost: float = 0.0  # sum of what the backend reported, for cross-checking
-    aux_cost: float = 0.0  # other models (scope model, reranker), API-equivalent
+    aux_cost: float = 0.0  # other models (scope model, reranker), API-equivalent, as billed
+    cached_reranks: int = 0  # reranks served from the cache (billed nothing)
     stopped_early: bool = False
     paused: str | None = None  # the usage governor's reason, when it stopped the run
     finished: bool = False
@@ -321,6 +322,7 @@ def execute(
         stats.embed_cost += emb_cost
         stats.reported_cost += (result.reported_cost_usd or 0.0) if result else 0.0
         stats.aux_cost += sum(float(a["cost_usd"]) for a in aux.values())
+        stats.cached_reranks += int("cached_tokens" in aux.get("rerank", {}))
         if error is None:
             stats.answered += 1
             streak = 0

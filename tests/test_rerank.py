@@ -136,3 +136,14 @@ def test_rerank_spec_resolution() -> None:
         lite = FakeReranker()
         lite.name = "rerank-3-lite"
         make_retriever(None, {**base, "rerank": {}}, "t", None, [], lite)  # type: ignore[arg-type]
+
+
+def test_cached_rerank_records_cached_tokens_not_cost() -> None:
+    class Hit(FakeReranker):
+        def rerank(self, query: str, texts: list[str], top_k: int) -> Reranked:
+            out = super().rerank(query, texts, top_k)
+            return Reranked(out.order, 0, cached_tokens=out.tokens)
+
+    r = RerankingRetriever(FakeBase(_hits(1, 2)), Hit(), k=2).retrieve("q", None)
+    assert r.aux == {"rerank": {"model": "rerank-3", "tokens": 0, "cost_usd": 0.0,
+                                "cached_tokens": 1000}}  # fmt: skip

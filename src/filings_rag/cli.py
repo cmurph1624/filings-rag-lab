@@ -1,3 +1,4 @@
+import contextlib
 import csv
 from collections import Counter
 from pathlib import Path
@@ -6,12 +7,13 @@ from typing import Annotated
 import psycopg
 import typer
 
-from filings_rag import corpora, db
+from filings_rag import cache, corpora, db
 from filings_rag.backends.factory import make_backend
 from filings_rag.benchmark import financebench
 from filings_rag.config import get_settings
 from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
+from filings_rag.embed.base import Embedder
 from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import judge as judging
@@ -176,17 +178,28 @@ def corpus_define(
 def ingest_build(
     pipeline: str = typer.Argument(..., help="name@version, e.g. naive-fixed@1"),
     only: str = typer.Option("", help="Build just this doc_name"),
+    no_cache: bool = typer.Option(False, help="Embed every chunk, ignoring the embedding cache"),
 ) -> None:
-    """Chunk, embed and index every document for one pipeline version (resumable)."""
+    """Chunk, embed and index every document for one pipeline version (resumable).
+
+    Chunks whose text was embedded before (by any pipeline, same embedder) reuse that vector."""
     settings = get_settings()
     p = get_pipeline(pipeline)
-    embedder = VoyageEmbedder(settings.voyage_api_key)
-    with psycopg.connect(settings.database_url) as conn:
+    embedder: Embedder = VoyageEmbedder(settings.voyage_api_key)
+    with contextlib.ExitStack() as stack:
+        if not no_cache:
+            embedder = cache.CachedEmbedder(
+                embedder, stack.enter_context(cache.connect(settings.database_url))
+            )
+        conn = stack.enter_context(psycopg.connect(settings.database_url))
         stats = build.build(conn, p, embedder, docs=[only] if only else None, log=typer.echo)
     cost = embedding_cost(embedder.name, stats.embed_tokens)
+    saved = embedding_cost(embedder.name, stats.cached_tokens)
     typer.echo(
         f"{pipeline}: {stats.documents} documents ({stats.empty} empty), {stats.chunks:,} chunks, "
-        f"{stats.embed_tokens:,} embedding tokens (${cost:.2f} at list)"
+        f"{stats.embed_tokens:,} embedding tokens (${cost:.2f} at list); "
+        f"{stats.cached_chunks:,} chunks from cache ({stats.cached_tokens:,} tokens, "
+        f"${saved:.2f} not re-billed)"
     )
 
 
@@ -362,25 +375,31 @@ def run_cmd(
         help="Only the question ids listed in this file, one per line. The run is partial: its"
         " report shows answered N/150, and a later --resume without --only fills in the rest.",
     ),
+    no_cache: bool = typer.Option(
+        False, help="Call the embedder and reranker every time, ignoring their caches"
+    ),
 ) -> None:
-    """Answer the question set with one config and record everything in `runs`."""
+    """Answer the question set with one config and record everything in `runs`.
+
+    Query embeddings and reranks come from their caches when the same call was made before,
+    which makes retrieval repeatable; a cache hit bills nothing and is recorded as cached."""
     cfg = run_config.load(Path(config))
     settings = get_settings()
     git = harness.git_info(ROOT)
     if git.dirty:
         typer.echo("warning: uncommitted changes; the recorded git SHA won't reproduce this run")
-    with psycopg.connect(settings.database_url) as conn:
+    with contextlib.ExitStack() as stack:
+        conn = stack.enter_context(psycopg.connect(settings.database_url))
+        cache_conn = None if no_cache else stack.enter_context(cache.connect(settings.database_url))
         table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
         corpus_ids = corpora.document_ids(conn, cfg.corpus, table)
         rr = resolve_spec(cfg.retriever).get("rerank")
-        retriever = make_retriever(
-            conn,
-            cfg.retriever,
-            table,
-            make_embedder(embedder_name, dims, settings),
-            corpus_ids,
-            make_reranker(rr["model"], settings) if rr else None,
-        )
+        embedder = make_embedder(embedder_name, dims, settings)
+        reranker = make_reranker(rr["model"], settings) if rr else None
+        if cache_conn is not None:
+            embedder = cache.CachedEmbedder(embedder, cache_conn)
+            reranker = cache.CachedReranker(reranker, cache_conn) if reranker else None
+        retriever = make_retriever(conn, cfg.retriever, table, embedder, corpus_ids, reranker)
         scoper = make_scoper(conn, cfg.retriever.get("scope"), corpus_ids, CORPUS / "companies.csv")
         spec = cfg.backend_spec
         backend = make_backend(spec) if spec else None  # None: retrieval-only run
@@ -434,6 +453,12 @@ def run_cmd(
         f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f},"
         f" scope/rerank models ${s.aux_cost:.4f});"
         f" backend reported ${s.reported_cost:.4f}"
+        + (
+            f"\n  {s.cached_reranks} questions reranked from the cache (not billed here;"
+            " `frl report` prices them in its plain/Batch API views)"
+            if s.cached_reranks
+            else ""
+        )
     )
     if s.paused:  # a clean stop, not a failure: exit 3 like `usage gate`
         raise typer.Exit(3)
