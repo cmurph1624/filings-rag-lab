@@ -1,0 +1,56 @@
+# Retrieval gate (P3 PR 4): `frl gate` on the self-hosted runner (the Nucbox) against the
+# frl_ci database, for PRs that touch retrieval. The verdict is posted as a PR comment.
+name: eval-gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/filings_rag/ingest/**"
+      - "src/filings_rag/retrieve/**"
+      - "src/filings_rag/embed/**"
+      - "src/filings_rag/rerank/**"
+      - "src/filings_rag/route/**"
+      - "src/filings_rag/facts/**"
+      - "src/filings_rag/harness/**"
+      - "src/filings_rag/extract/**"
+      - "src/filings_rag/cache.py"
+      - "src/filings_rag/corpora.py"
+      - "src/filings_rag/eval/gate.py"
+      - "src/filings_rag/eval/retrieval.py"
+      - "config/**"
+      - "configs/**"
+      - "corpus/**"
+      - "migrations/**"
+      - "scripts/ci_gate.sh"
+      - ".github/workflows/eval-gate.yml"
+
+concurrency:
+  group: eval-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: [self-hosted, nucbox, frl]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Retrieval gate
+        run: scripts/ci_gate.sh "${{ github.event.pull_request.base.sha }}" "$RUNNER_TEMP/verdict.md"
+      - name: Post the verdict on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          f="$RUNNER_TEMP/verdict.md"
+          [ -s "$f" ] || echo "## Retrieval gate: ERROR — no verdict; see the job log." > "$f"
+          printf '\n_Gate for %s, [job log](%s/%s/actions/runs/%s)._\n' "${SHA:0:7}" \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$f"
+          gh pr comment "$PR" --edit-last --body-file "$f" 2>/dev/null \
+            || gh pr comment "$PR" --body-file "$f"

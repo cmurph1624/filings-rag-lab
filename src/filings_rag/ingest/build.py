@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 from filings_rag.embed.base import Embedder, to_pgvector
 from filings_rag.extract.html import EXTRACTOR
 from filings_rag.ingest.base import Doc, IngestPipeline, chunk_table
-from filings_rag.retrieve.bm25 import ensure_postings
+from filings_rag.retrieve.bm25 import ensure_postings, postings_tables
 
 
 @dataclass
@@ -143,3 +143,20 @@ def build(
     if added:
         log(f"  bm25: indexed {added:,} chunks")
     return stats
+
+
+def drop(conn: psycopg.Connection[Any], p: IngestPipeline) -> bool:
+    """Remove a pipeline version's build: chunk table, BM25 tables, labels and registry row.
+    For CI, where a PR's new pipeline is rebuilt on every push. Returns whether it existed."""
+    table = chunk_table(p.name, p.version)
+    with conn.transaction():
+        conn.execute(
+            "DELETE FROM evidence_labels WHERE pipeline = %s AND version = %s",
+            (p.name, p.version),
+        )
+        for t in (*postings_tables(table), table):
+            conn.execute(sql.SQL("DROP TABLE IF EXISTS {t}").format(t=sql.Identifier(t)))
+        cur = conn.execute(
+            "DELETE FROM pipelines WHERE name = %s AND version = %s", (p.name, p.version)
+        )
+    return cur.rowcount > 0

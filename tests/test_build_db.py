@@ -194,3 +194,16 @@ def test_new_version_embeds_only_changed_chunks(conn: psycopg.Connection) -> Non
             assert v1 == v2  # a cached vector is the one stored the first time
         finally:
             cc.execute("DELETE FROM embedding_cache WHERE embedder = 'zz-fake-embed'")
+
+
+def test_drop_removes_a_build(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.ingest.build import drop
+
+    p = ZzPipe(version=1, window_words=10, overlap_words=2)
+    build(conn, p, FakeEmbedder(), docs=[DOC], log=lambda s: None)
+    assert drop(conn, p) is True
+    assert conn.execute("SELECT to_regclass('chunks__zz_test__v1')").fetchone() == (None,)
+    assert conn.execute("SELECT count(*) FROM pipelines WHERE name = 'zz-test'").fetchone() == (0,)
+    assert drop(conn, p) is False
+    again = build(conn, p, FakeEmbedder(), docs=[DOC], log=lambda s: None)
+    assert again.chunks == 3  # a rebuild from scratch

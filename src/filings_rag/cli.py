@@ -312,6 +312,11 @@ def gate_cmd(
     gate_config: str = typer.Option("config/gate.toml", "--config", help="Gate config"),
     out: str = typer.Option("", help="Also write the markdown verdict to this file"),
     no_cache: bool = typer.Option(False, help="Ignore the embedding and rerank caches"),
+    fresh: bool = typer.Option(
+        False,
+        help="With --pipeline, drop any earlier build of it first (CI rebuilds a PR's new"
+        " pipeline on every push). Refused for a pipeline a baseline run uses.",
+    ),
 ) -> None:
     """Retrieval gate: run each gated config retrieval-only and compare it with its pinned
     baseline. Exits 1 when a metric drops by more than `config/gate.toml` allows."""
@@ -330,8 +335,24 @@ def gate_cmd(
             if r.source == "edgar" and r.accession
         }
         corpora.define(conn, cfg_gate.corpus, accessions)  # no-op once defined; checks it
+        if fresh and not pipeline:
+            typer.echo("--fresh needs --pipeline", err=True)
+            raise typer.Exit(1)
         if pipeline:
             p = get_pipeline(pipeline)
+            if fresh:
+                used = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT config->>'pipeline' FROM runs WHERE id = ANY(%s)",
+                        ([c.baseline for c in cfg_gate.checks],),
+                    )
+                }
+                if pipeline in used:
+                    typer.echo(f"--fresh: {pipeline} is a baseline's pipeline", err=True)
+                    raise typer.Exit(1)
+                if build.drop(conn, p):
+                    typer.echo(f"dropped the earlier build of {pipeline}")
             embedder: Embedder = VoyageEmbedder(settings.voyage_api_key)
             if cache_conn is not None:
                 embedder = cache.CachedEmbedder(embedder, cache_conn)
