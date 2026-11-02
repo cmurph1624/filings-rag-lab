@@ -20,6 +20,12 @@ To refresh it: `createdb frl_ci2`, then `pg_dump frl --exclude-table='chunks__na
 --exclude-table='chunks__table_preserving__v1*' | psql frl_ci2`, drop those two pipelines'
 registry rows (`build.drop`), and swap the names.
 
+## Trust
+
+PR code runs on the Nucbox. Both jobs run only for same-repo PRs, never forks, and the gate also
+requires an author with write access (OWNER, MEMBER or COLLABORATOR). The `eval:full` label can
+only be added by someone with write access. The repo is private with one collaborator.
+
 ## `eval-gate`: every PR that touches retrieval
 
 Triggered by PRs touching ingest, retrieve, embed, rerank, route, facts, harness, extract, the
@@ -29,8 +35,9 @@ caches, corpora, the gate, `config/`, `configs/`, `corpus/` or migrations.
 2. For each pipeline version the PR adds to the registry (compared with the base commit):
    `frl gate --pipeline name@v --fresh`. That rebuilds it over the 147-filing gate corpus from
    scratch on every push, re-embedding only changed chunk text.
-3. The verdict is posted as one PR comment, edited on each push, and the check fails on any
-   breach.
+3. The verdict is posted as one PR comment, found by its `<!-- frl-eval-gate -->` marker and
+   edited on each push, and the check fails on any breach. eval-full reports are separate
+   comments that the gate never touches.
 
 A pipeline edited in place, without a version bump, fails pytest instead: each built
 pipeline's output is pinned by a test.

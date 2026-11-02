@@ -320,6 +320,9 @@ def gate_cmd(
 ) -> None:
     """Retrieval gate: run each gated config retrieval-only and compare it with its pinned
     baseline. Exits 1 when a metric drops by more than `config/gate.toml` allows."""
+    if fresh and not pipeline:
+        typer.echo("--fresh needs --pipeline", err=True)
+        raise typer.Exit(1)
     cfg_gate = gate.load_config(ROOT / gate_config, ROOT)
     settings = get_settings()
     git = harness.git_info(ROOT)
@@ -335,9 +338,6 @@ def gate_cmd(
             if r.source == "edgar" and r.accession
         }
         corpora.define(conn, cfg_gate.corpus, accessions)  # no-op once defined; checks it
-        if fresh and not pipeline:
-            typer.echo("--fresh needs --pipeline", err=True)
-            raise typer.Exit(1)
         if pipeline:
             p = get_pipeline(pipeline)
             if fresh:

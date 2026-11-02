@@ -30,6 +30,12 @@ concurrency:
 
 jobs:
   gate:
+    # PR code runs on the Nucbox, which holds the Voyage key and the frl_ci database: only
+    # same-repo PRs from people with write access, never forks.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+               github.event.pull_request.author_association)
     runs-on: [self-hosted, nucbox, frl]
     timeout-minutes: 120
     permissions:
@@ -52,5 +58,14 @@ jobs:
           [ -s "$f" ] || echo "## Retrieval gate: ERROR — no verdict; see the job log." > "$f"
           printf '\n_Gate for %s, [job log](%s/%s/actions/runs/%s)._\n' "${SHA:0:7}" \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$f"
-          gh pr comment "$PR" --edit-last --body-file "$f" 2>/dev/null \
-            || gh pr comment "$PR" --body-file "$f"
+          # Update this gate's own comment (the bot's, with its marker), never any other comment.
+          marker='<!-- frl-eval-gate -->'
+          echo "$marker" >> "$f"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq "map(select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))))
+                  | last | .id // empty" | tail -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$f" > /dev/null
+          else
+            gh pr comment "$PR" --body-file "$f"
+          fi

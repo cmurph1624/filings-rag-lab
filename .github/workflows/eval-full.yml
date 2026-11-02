@@ -12,7 +12,10 @@ concurrency:
 
 jobs:
   eval:
-    if: github.event.label.name == 'eval:full'
+    # Same guard as eval-gate: PR code runs on the Nucbox. The label also needs write access.
+    if: >-
+      github.event.label.name == 'eval:full' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, nucbox, frl]
     timeout-minutes: 600
     permissions:
@@ -30,6 +33,6 @@ jobs:
         run: |
           f="$RUNNER_TEMP/report.md"
           [ -s "$f" ] || echo "## Answer eval: ERROR — no report; see the job log." > "$f"
-          printf '\n_[job log](%s/%s/actions/runs/%s)_\n' \
+          printf '\n_[job log](%s/%s/actions/runs/%s)_\n<!-- frl-eval-full -->\n' \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$f"
           gh pr comment "$PR" --body-file "$f"

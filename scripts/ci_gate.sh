@@ -16,12 +16,21 @@ fi
 uv sync --locked -q || exit 2
 uv run frl db migrate || exit 2
 
-list='from filings_rag.ingest.registry import PIPELINES
+# Each list says which source tree it imported, and the script checks it: if the base listing
+# silently imported the PR's own registry, every new pipeline would skip the gate.
+list='import sys, filings_rag
+from filings_rag.ingest.registry import PIPELINES
+print(filings_rag.__file__, file=sys.stderr)
 print("\n".join(f"{n}@{v}" for n, vs in PIPELINES.items() for v in vs))'
 rm -rf "$tmp/base-src" && mkdir -p "$tmp/base-src"
 git archive "$base_sha" src | tar -x -C "$tmp/base-src" || exit 2
-PYTHONPATH="$tmp/base-src/src" uv run python -c "$list" | sort > "$tmp/pipelines-base.txt" || exit 2
-uv run python -c "$list" | sort > "$tmp/pipelines-head.txt" || exit 2
+PYTHONPATH="$tmp/base-src/src" uv run python -c "$list" 2> "$tmp/origin-base.txt" \
+  | sort > "$tmp/pipelines-base.txt" || exit 2
+uv run python -c "$list" 2> "$tmp/origin-head.txt" | sort > "$tmp/pipelines-head.txt" || exit 2
+if [[ $(cat "$tmp/origin-base.txt") != "$tmp/base-src/src/"* ]]; then
+  echo "base registry imported from $(cat "$tmp/origin-base.txt"), not the base commit" >&2
+  exit 2
+fi
 mapfile -t added < <(comm -13 "$tmp/pipelines-base.txt" "$tmp/pipelines-head.txt")
 
 status=0
