@@ -43,12 +43,21 @@ def load_prices(path: Path = PRICES_PATH) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+def price_key(model: str, table: dict[str, Any]) -> str:
+    """The price-table entry for a served model. OpenAI answers with a dated snapshot
+    ("gpt-6.1-sol-2026-09-01") of the model we asked for, which is priced as that model."""
+    if model in table:
+        return model
+    aliases = [k for k in table if model.startswith(k + "-")]
+    if not aliases:
+        raise KeyError(f"no price for model {model!r}; add it to config/prices.toml")
+    return max(aliases, key=len)
+
+
 def model_cost(model: str, usage: Usage, prices: dict[str, Any] | None = None) -> float:
     """USD at list price. Unknown models raise rather than silently costing $0."""
     table = (prices or load_prices())["models"]
-    if model not in table:
-        raise KeyError(f"no price for model {model!r}; add it to config/prices.toml")
-    p = table[model]
+    p = table[price_key(model, table)]
     long = "long_context_threshold" in p and usage.prompt_tokens > p["long_context_threshold"]
     # Long-context tier: input/output use their own rates; cache rates scale with input.
     scale = p["long_input"] / p["input"] if long else 1.0
