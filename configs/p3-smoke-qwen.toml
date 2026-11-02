@@ -1,5 +1,5 @@
 # P3 PR 6 smoke: the P2-best pipeline with a different answering model, 5 questions
-# (--only). Not a result: PR 7 runs the full comparison.
+# (--limit 5). Not a result: PR 7 runs the full comparison.
 name = "p3-smoke-qwen"
 pipeline = "structured@1"
 questions = "financebench-open"
