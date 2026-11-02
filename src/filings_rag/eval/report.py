@@ -3,10 +3,12 @@
 import math
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import psycopg
 
+from filings_rag.eval import faithful, periods
 from filings_rag.eval import retrieval as rmetrics
 from filings_rag.eval.routes import VERSION as ROUTES_VERSION
 from filings_rag.eval.routes import RouteLabel
@@ -17,6 +19,7 @@ from filings_rag.pricing import Usage, batch_api_cost, load_prices, plain_api_co
 from filings_rag.retrieve.factory import resolve_spec
 
 KS = (1, 3, 5, 10)
+COMPANIES = Path(__file__).resolve().parents[3] / "corpus" / "companies.csv"
 COST_VIEWS = ("as recorded", "plain API", "Batch API")
 
 
@@ -53,6 +56,9 @@ class RunSummary:
     cited_labelled: int = 0  # of those, excerpts that hold labelled evidence
     retrieve_s: list[float] = field(default_factory=list)
     generate_s: list[float] = field(default_factory=list)
+    period_of: dict[str, str] = field(default_factory=dict)  # question id -> right/wrong/none
+    faithful_judge: str = "–"
+    faith: dict[str, tuple[int, int, int]] = field(default_factory=dict)  # sup, unsup, contra
 
     @property
     def correct(self) -> int:
@@ -100,7 +106,13 @@ def citation_counts(
     return citing, cited, good
 
 
-def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
+def summarize(
+    conn: psycopg.Connection[Any],
+    run_id: int,
+    routes: dict[str, RouteLabel] | None = None,
+    companies_csv: Path = COMPANIES,
+) -> RunSummary:
+    """`routes` (hand route labels) adds fiscal-period correctness."""
     row = conn.execute(
         "SELECT name, config, config_hash, git_sha, git_dirty FROM runs WHERE id = %s", (run_id,)
     ).fetchone()
@@ -201,6 +213,21 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
             (run_id,),
         ).fetchall()
         s.citing, s.cited, s.cited_labelled = citation_counts(answers, labelled)
+        if routes:
+            expected = periods.expectations(conn, [a[0] for a in answers], routes, companies_csv)
+            s.period_of = {
+                qid: periods.classify(answer, expected[qid])
+                for qid, answer, _ in answers
+                if qid in expected and s.verdict_of.get(qid) != "refused"
+            }
+        if cfg.judge_key is not None:
+            s.faithful_judge = faithful.judge_key(cfg)
+            for qid, *n in conn.execute(
+                "SELECT question_id, supported, unsupported, contradicted FROM faithfulness"
+                " WHERE run_id = %s AND judge = %s AND claims IS NOT NULL",
+                (run_id, s.faithful_judge),
+            ):
+                s.faith[qid] = (n[0], n[1], n[2])
     s.retrieval, s.unlabelled = rmetrics.load(conn, run_id, cfg.pipeline)
     conn.commit()
     return s
@@ -273,6 +300,7 @@ def render(
         out += _answers(runs, heads, rows)
         if routes:
             out += _by_route(runs, heads, routes)
+        out += _generation(heads, rows)
     out += _retrieval(runs, heads, rows)
     if any(s.scopes for s in runs):
         out += _scoping(heads, rows)
@@ -362,6 +390,66 @@ def _by_route(runs: list[RunSummary], heads: list[str], routes: dict[str, RouteL
         f"By hand route label (`{ROUTES_VERSION}`, `corpus/route_labels.csv`):",
         "",
         _table(["subset"] + heads[1:], body),
+        "",
+    ]
+
+
+def _generation(heads: list[str], rows: Rows) -> list[str]:
+    def period(v: str) -> Any:
+        return _gen(
+            lambda s: (
+                _pct(sum(x == v for x in s.period_of.values()), len(s.period_of))
+                if s.period_of
+                else "–"
+            )
+        )
+
+    def claims(s: RunSummary) -> tuple[int, int, int]:
+        sup, uns, con = (sum(n[i] for n in s.faith.values()) for i in range(3))
+        return sup, uns, con
+
+    def faith(fn: Any) -> Any:
+        return _gen(lambda s: fn(s) if s.faith else "–")
+
+    return [
+        "## Generation",
+        "",
+        "*Fiscal period* (`eval/periods.py`, deterministic): whether the answer states the "
+        "period the question is about, the latest of its `routes@1` periods, in any of its "
+        "forms (FinanceBench label, the company's own year name, a date in the period). "
+        "*Wrong*: it states periods but not that one. Over answers not judged refused.",
+        "",
+        "*Faithfulness* (`faithful@1`, the run's judge model): each checkable claim in the "
+        "answer, labelled against the context the generator was given (excerpts and Facts), "
+        "not against the gold answer.",
+        "",
+        _table(
+            heads,
+            rows(
+                ("period: right", period("right")),
+                ("period: wrong", period("wrong")),
+                ("period: none stated", period("none")),
+                ("faithfulness: answers checked", faith(lambda s: _pct(len(s.faith), s.answered))),
+                (
+                    "claims supported",
+                    faith(lambda s: _pct(claims(s)[0], sum(claims(s)))),
+                ),
+                ("claims unsupported", faith(lambda s: str(claims(s)[1]))),
+                ("claims contradicted", faith(lambda s: str(claims(s)[2]))),
+                (
+                    "answers with a contradicted claim",
+                    faith(lambda s: _pct(sum(n[2] > 0 for n in s.faith.values()), len(s.faith))),
+                ),
+                (
+                    "answers fully supported",
+                    faith(
+                        lambda s: _pct(
+                            sum(n[1] == n[2] == 0 for n in s.faith.values()), len(s.faith)
+                        )
+                    ),
+                ),
+            ),
+        ),
         "",
     ]
 

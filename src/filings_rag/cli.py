@@ -16,14 +16,14 @@ from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.base import Embedder
 from filings_rag.embed.voyage import VoyageEmbedder
-from filings_rag.eval import gate, labels, noise, report, routes
+from filings_rag.eval import faithful, gate, labels, noise, report, routes
 from filings_rag.eval import judge as judging
 from filings_rag.facts import concepts, coverage, lookup, metrics
 from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
 from filings_rag.harness import setup
-from filings_rag.harness.prompts import get_judge_prompt, get_prompt
+from filings_rag.harness.prompts import get_faithful_prompt, get_judge_prompt, get_prompt
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
@@ -629,6 +629,59 @@ def judge_cmd(
         raise typer.Exit(1)
 
 
+@app.command("faithful")
+def faithful_cmd(
+    run_id: int = typer.Argument(..., help="Run to check"),
+    only: str = typer.Option("", help="Only these question ids (a file, one per line)"),
+) -> None:
+    """Check each answer's claims against the context its generator saw, with faithful@1 and
+    the run's judge model (resumable)."""
+    with psycopg.connect(get_settings().database_url) as conn:
+        row = conn.execute("SELECT config FROM runs WHERE id = %s", (run_id,)).fetchone()
+        if row is None:
+            typer.echo(f"no run {run_id}", err=True)
+            raise typer.Exit(1)
+        try:
+            cfg = run_config.from_dict(row[0])
+        except ValueError as e:
+            typer.echo(f"run {run_id}'s stored config no longer loads ({e}); re-run it", err=True)
+            raise typer.Exit(1) from e
+        if cfg.generation is None or cfg.judge_spec is None:
+            typer.echo(f"run {run_id} has no [generation] and [judge] to check with", err=True)
+            raise typer.Exit(1)
+        shard = None
+        if only:
+            path = Path(only)
+            if not path.is_file():
+                typer.echo(f"--only: no file {only}", err=True)
+                raise typer.Exit(1)
+            shard = {ln.strip() for ln in path.read_text().splitlines() if ln.strip()}
+        typer.echo(f"run {run_id}: checking faithfulness with {faithful.judge_key(cfg)}")
+        try:
+            s = faithful.faithful_run(
+                conn,
+                run_id,
+                cfg,
+                make_backend(cfg.judge_spec),
+                get_faithful_prompt(faithful.PROMPT),
+                get_prompt(cfg.generation["prompt"]),
+                concurrency=cfg.execution["concurrency"],
+                only=shard,
+                log=typer.echo,
+            )
+        except ValueError as e:  # pipeline not built, or chunks missing
+            typer.echo(f"cannot check run {run_id}: {e}", err=True)
+            raise typer.Exit(1) from e
+    typer.echo(
+        f"run {run_id}: {s.judged} checked, {s.failed} failed, {s.skipped} already checked;"
+        f" cost ${s.cost:.4f} (API-equivalent)"
+    )
+    if s.paused:
+        raise typer.Exit(3)
+    if s.failed:
+        raise typer.Exit(1)
+
+
 @app.command("report")
 def report_cmd(
     run_id: int = typer.Argument(..., help="Run to report on"),
@@ -639,9 +692,12 @@ def report_cmd(
     """Accuracy, retrieval recall, cost and latency for one or more runs, as markdown."""
     with psycopg.connect(get_settings().database_url) as conn:
         try:
-            summaries = [report.summarize(conn, r) for r in [run_id, *(vs or [])]]
             labels_path = CORPUS / "route_labels.csv"
             route_labels = routes.load(labels_path) if labels_path.exists() else None
+            summaries = [
+                report.summarize(conn, r, route_labels, CORPUS / "companies.csv")
+                for r in [run_id, *(vs or [])]
+            ]
             text = report.render(summaries, retrieval_only=retrieval_only, routes=route_labels)
         except ValueError as e:  # unknown run, or a stored config that no longer loads
             typer.echo(f"cannot report: {e}", err=True)

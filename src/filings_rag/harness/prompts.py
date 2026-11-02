@@ -185,3 +185,45 @@ def get_judge_prompt(ref: str) -> JudgePrompt:
     if ref not in JUDGE_PROMPTS:
         raise ValueError(f"unknown judge prompt {ref!r}; known: {sorted(JUDGE_PROMPTS)}")
     return JUDGE_PROMPTS[ref]
+
+
+@dataclass(frozen=True)
+class FaithfulPrompt:
+    """Checks an answer against the context the generator was given, not against the gold."""
+
+    system: str
+    template: str  # {context}, {answer}
+
+    def render(self, context: str, answer: str) -> str:
+        return self.template.format(context=context, answer=answer)
+
+
+FAITHFUL_V1 = FaithfulPrompt(
+    system=(
+        "You check whether an answer about a company's SEC filings is supported by the context "
+        "its writer was given: numbered excerpts and, sometimes, a Facts section of values "
+        "computed from XBRL data. List the answer's checkable claims: each figure (amount, "
+        "ratio, percentage, count, date or period) and each factual statement about the "
+        "company that the answer asserts. Skip hedges, advice, definitions and statements "
+        "that the context lacks something. For each claim, give one support label:\n"
+        "- supported: the context states it, or it follows by arithmetic from figures the "
+        "context states (allow rounding to the answer's precision).\n"
+        "- unsupported: the context neither states it nor lets it be computed. Outside "
+        "knowledge that happens to be true is still unsupported.\n"
+        "- contradicted: the context gives a different value or says the opposite, for the "
+        "same item and period.\n"
+        "Judge only against the context, never your own knowledge. A refusal with no claims "
+        "gets an empty list. Reply with only a JSON object: "
+        '{"claims": [{"claim": "<short quote or paraphrase>", "support": "supported" | '
+        '"unsupported" | "contradicted", "source": "<[n] or [Fn] where it is, or none>"}]}'
+    ),
+    template="Context the writer was given:\n\n{context}\n\nAnswer to check:\n{answer}",
+)
+
+FAITHFUL_PROMPTS: dict[str, FaithfulPrompt] = {"faithful@1": FAITHFUL_V1}
+
+
+def get_faithful_prompt(ref: str) -> FaithfulPrompt:
+    if ref not in FAITHFUL_PROMPTS:
+        raise ValueError(f"unknown faithfulness prompt {ref!r}; known: {sorted(FAITHFUL_PROMPTS)}")
+    return FAITHFUL_PROMPTS[ref]
