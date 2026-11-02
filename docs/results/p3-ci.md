@@ -53,4 +53,30 @@ Smoke test: `EVAL_LIMIT=2 scripts/ci_eval_full.sh` ran, judged and reported run 
 
 ## Proof
 
-*(filled in below once the deliberately bad chunker PR has run)*
+**A harmless retrieval PR passes.** This PR (#30) touches gated paths. Its `eval-gate` run
+gated the current code, PASSED with every metric identical to the baselines, and posted the
+verdict comment.
+
+**A deliberately bad chunker is blocked.** Draft PR #31 added `naive-fixed@2`: 60-word windows
+with no overlap, so tables split mid-row. CI detected the new pipeline version, built it over the
+147-filing gate corpus (161,917 chunks, 16.3M tokens embedded, about $1.96 at list, 47 minutes
+for the whole job), labelled it, and **failed the check**
+([run](https://github.com/cmurph1624/filings-rag-lab/actions/runs/41380019974)):
+
+| check | metric | baseline (structured@1) | naive-fixed@2 | allowed drop |
+|---|---|---|---|---|
+| gate-best | recall@10 | 0.833 | 0.584 | 0.010 |
+| gate-best | hit@10 | 0.886 | 0.638 | 0.010 |
+| gate-best | MRR | 0.651 | 0.395 | 0.010 |
+| gate-best | fact checks | 48 | 48 | 0 |
+| gate-vector | recall@10 | 0.521 | 0.312 | 0.010 |
+| gate-vector | hit@10 | 0.557 | 0.349 | 0.010 |
+| gate-vector | MRR | 0.282 | 0.200 | 0.010 |
+
+41 questions (gate-best) and 43 (gate-vector) lost their evidence from the top 10. The fact route
+didn't move: it reads XBRL, not chunks. #31 was closed unmerged, and its build dropped from
+`frl_ci`.
+
+The plan estimated 3–4M tokens for a gate rebuild. Small windows make many more chunks, so a
+chunker change costs up to about $2 the first time. Later pushes to the same PR re-embed only
+chunk text that changed.
