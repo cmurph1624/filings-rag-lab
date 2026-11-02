@@ -47,6 +47,11 @@ cache_read = 0.10
 input = 0.0
 output = 0.0
 
+# The 4-bit build served in the P3 smoke run, under its served name.
+[models."Qwen3.6-27B-AWQ-4bit"]
+input = 0.0
+output = 0.0
+
 [embeddings.voyage-finance-2]
 input = 0.12            # first 50M tokens per account are free; we still price at list
 
