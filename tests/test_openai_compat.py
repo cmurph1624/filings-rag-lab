@@ -21,9 +21,11 @@ OK = {
 }
 
 
-def backend(handler: Any, sleeps: list[float] | None = None, **kw: Any) -> OpenAICompatBackend:
+def backend(
+    handler: Any, sleeps: list[float] | None = None, model: str = "gpt-6.1-sol", **kw: Any
+) -> OpenAICompatBackend:
     return OpenAICompatBackend(
-        "gpt-6.1-sol",
+        model,
         transport=httpx.MockTransport(handler),
         sleep=(sleeps if sleeps is not None else []).append,
         **kw,
@@ -66,7 +68,7 @@ def test_local_server_needs_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
         seen.append(req)
         return httpx.Response(200, json={**OK, "model": "Qwen/Qwen3.6-27B"})
 
-    b = backend(handler, base_url="http://127.0.0.1:8000/v1/")
+    b = backend(handler, model="Qwen/Qwen3.6-27B", base_url="http://127.0.0.1:8000/v1/")
     r = b.generate("s", "p")
     assert str(seen[0].url) == "http://127.0.0.1:8000/v1/chat/completions"
     assert "authorization" not in seen[0].headers
@@ -167,3 +169,23 @@ def test_gpu_cost_is_rate_times_wall_time() -> None:
     assert s.gpu_system_cost() == pytest.approx(0.63)
     s.wall_s = None  # unfinished run: no GPU figure
     assert s.gpu_cost is None
+
+
+def test_non_json_200_is_retried_then_fails() -> None:
+    calls: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200, text="<html>bad gateway page</html>")
+
+    with pytest.raises(BackendError, match="non-JSON"):
+        backend(handler, max_retries=1).generate("s", "p")
+    assert len(calls) == 2
+
+
+def test_unknown_served_name_falls_back_to_the_configured_model() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**OK, "model": "/models/snapshots/abc123"})
+
+    r = backend(handler).generate("s", "p")
+    assert r.model == "gpt-6.1-sol"

@@ -70,18 +70,29 @@ class OpenAICompatBackend:
                 last = f"{type(e).__name__}: {e}"
             else:
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if not isinstance(data, dict):
-                        raise BackendError(f"unexpected reply: {resp.text[:200]!r}")
-                    return data
-                last = f"HTTP {resp.status_code}: {resp.text[:300]}"
-                if resp.status_code not in RETRY_STATUS:
+                    try:
+                        data = resp.json()
+                    except ValueError:  # e.g. an HTML page from a proxy or tunnel
+                        data = None
+                    if isinstance(data, dict):
+                        return data
+                    last = f"HTTP 200 with a non-JSON reply: {resp.text[:200]!r}"
+                else:
+                    last = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                if resp.status_code != 200 and resp.status_code not in RETRY_STATUS:
                     raise BackendError(f"openai-compatible API error: {last}")
                 with contextlib.suppress(KeyError, ValueError):
                     wait = min(float(resp.headers["retry-after"]), 120.0)
             if attempt < self.max_retries:
                 self._sleep(wait)
         raise BackendError(f"openai-compatible API failed after {self.max_retries} retries: {last}")
+
+    def _served_model(self, reported: Any) -> str:
+        """The server's model name when it is ours or a dated snapshot of ours (OpenAI);
+        otherwise ours. A vLLM server may report a path or a served name that the price table
+        and our runs don't know."""
+        name = str(reported or "")
+        return name if name == self.model or name.startswith(self.model + "-") else self.model
 
     def generate(self, system: str, prompt: str) -> Result:
         body: dict[str, Any] = {
@@ -118,6 +129,6 @@ class OpenAICompatBackend:
             text=msg.get("content") or refusal or "",
             usage=usage,
             latency_s=latency,
-            model=str(data.get("model") or self.model),
+            model=self._served_model(data.get("model")),
             stop_reason="refusal" if refusal else _STOP.get(finish, finish),
         )

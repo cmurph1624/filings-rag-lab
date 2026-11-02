@@ -21,7 +21,9 @@ open model on vLLM. Config (`[generation]`):
 Retries on 408/409/429/5xx and transport errors with exponential backoff or the server's
 `Retry-After`; any other error fails the call. Cached prompt tokens are recorded as
 `cache_read_tokens` and the rest of the prompt as `input_tokens`. A `refusal` or a
-`content_filter` finish is recorded as a refusal.
+`content_filter` finish is recorded as a refusal. A 200 reply that isn't JSON (a proxy's error page) is retried like a 5xx. The
+recorded model is the server's name when it is the configured model or a dated snapshot of it,
+and the configured name otherwise, so a vLLM path or `--served-model-name` can't break pricing.
 
 ## Models and prices (checked 2026-11-02)
 
