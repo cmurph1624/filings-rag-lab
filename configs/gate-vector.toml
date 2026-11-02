@@ -1,0 +1,14 @@
+# Retrieval gate (P3 PR 3): plain vector top-10 over the whole gate corpus, no scope or
+# reranker. The reranker and scope can hide a chunking regression; this config can't.
+name = "gate-vector"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-gate@1"
+
+[retriever]
+kind = "vector"
+k = 10
+
+[execution]  # not part of the config hash
+concurrency = 4
+max_consecutive_failures = 5

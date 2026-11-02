@@ -1,5 +1,6 @@
 import contextlib
 import csv
+import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import Annotated
@@ -14,21 +15,18 @@ from filings_rag.config import get_settings
 from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.base import Embedder
-from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
+from filings_rag.eval import gate, labels, noise, report, routes
 from filings_rag.eval import judge as judging
-from filings_rag.eval import labels, noise, report, routes
 from filings_rag.facts import concepts, coverage, lookup, metrics
 from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
+from filings_rag.harness import setup
 from filings_rag.harness.prompts import get_judge_prompt, get_prompt
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
-from filings_rag.rerank.factory import make_reranker
-from filings_rag.retrieve.factory import make_retriever, resolve_spec
-from filings_rag.retrieve.scope import make_scoper
 from filings_rag.route import evaluate as route_eval
 from filings_rag.route.router import make_router
 
@@ -304,6 +302,87 @@ def route_facts_cmd(run_id: int = typer.Argument(..., help="A run made with a [r
             typer.echo(f"  {c.question_id[16:]}  gold {c.gold}  fact {c.shown or '–'}")
 
 
+@app.command("gate")
+def gate_cmd(
+    pipeline: str = typer.Option(
+        "",
+        help="Check this pipeline (name@version) instead of each config's own: it is built"
+        " over the gate corpus (re-embedding only changed chunks) and labelled first",
+    ),
+    gate_config: str = typer.Option("config/gate.toml", "--config", help="Gate config"),
+    out: str = typer.Option("", help="Also write the markdown verdict to this file"),
+    no_cache: bool = typer.Option(False, help="Ignore the embedding and rerank caches"),
+) -> None:
+    """Retrieval gate: run each gated config retrieval-only and compare it with its pinned
+    baseline. Exits 1 when a metric drops by more than `config/gate.toml` allows."""
+    cfg_gate = gate.load_config(ROOT / gate_config, ROOT)
+    settings = get_settings()
+    git = harness.git_info(ROOT)
+    route_labels = routes.load(CORPUS / "route_labels.csv")
+    with contextlib.ExitStack() as stack:
+        conn = stack.enter_context(psycopg.connect(settings.database_url))
+        cache_conn = None if no_cache else stack.enter_context(cache.connect(settings.database_url))
+        _, _, corpus = corpora.parse_ref(cfg_gate.corpus)
+        accessions = {
+            r.accession
+            for m in corpus.manifests
+            for r in fetch.read_manifest(CORPUS / m)
+            if r.source == "edgar" and r.accession
+        }
+        corpora.define(conn, cfg_gate.corpus, accessions)  # no-op once defined; checks it
+        if pipeline:
+            p = get_pipeline(pipeline)
+            embedder: Embedder = VoyageEmbedder(settings.voyage_api_key)
+            if cache_conn is not None:
+                embedder = cache.CachedEmbedder(embedder, cache_conn)
+            docs = corpora.doc_names(conn, cfg_gate.corpus)
+            typer.echo(f"building {pipeline} over {cfg_gate.corpus} ({len(docs)} filings)")
+            stats = build.build(conn, p, embedder, docs=docs, log=lambda _: None)
+            typer.echo(
+                f"  {stats.documents} new filings, {stats.chunks:,} chunks:"
+                f" {stats.embed_tokens:,} tokens embedded, {stats.cached_chunks:,} chunks cached"
+            )
+            lr = labels.label(conn, p)
+            typer.echo(f"  labelled {lr.labelled}/{lr.items} evidence passages")
+        results = []
+        for check in cfg_gate.checks:
+            raw = tomllib.loads(check.config.read_text())
+            if pipeline:
+                raw["pipeline"] = pipeline
+            if raw.get("corpus") != cfg_gate.corpus:
+                typer.echo(f"{check.config.name}: corpus must be {cfg_gate.corpus}", err=True)
+                raise typer.Exit(1)
+            cfg = run_config.from_dict(raw)
+            if cfg.backend_spec is not None:
+                typer.echo(f"{check.config.name}: gate configs are retrieval-only", err=True)
+                raise typer.Exit(1)
+            try:
+                side = setup.retrieval_side(
+                    conn, cfg, settings, CORPUS / "companies.csv", cache_conn
+                )
+                baseline = gate.measure(conn, check.baseline, route_labels)
+            except ValueError as e:
+                typer.echo(f"{check.config.name}: {e}", err=True)
+                raise typer.Exit(1) from e
+            run_id = harness.create_run(conn, cfg, git)
+            typer.echo(f"{cfg.name}: run {run_id} vs baseline {check.baseline}")
+            s = harness.execute(
+                conn, run_id, cfg, side.retriever, None, None, git,
+                scoper=side.scoper, router=side.router, log=lambda _: None,
+            )  # fmt: skip
+            if s.failed or s.stopped_early:
+                typer.echo(f"{cfg.name}: run {run_id} had {s.failed} failures", err=True)
+                raise typer.Exit(1)
+            candidate = gate.measure(conn, run_id, route_labels)
+            results.append(gate.compare(cfg.name, baseline, candidate, cfg_gate.allowed_drop))
+    text = gate.render(results, cfg_gate.corpus)
+    if out:
+        Path(out).write_text(text)
+    typer.echo(text)
+    if not all(r.ok for r in results):
+        raise typer.Exit(1)
+
+
 @app.command("noise")
 def noise_cmd(
     run_ids: Annotated[list[int], typer.Argument(help="Runs of the same config (two or more)")],
@@ -391,23 +470,15 @@ def run_cmd(
     with contextlib.ExitStack() as stack:
         conn = stack.enter_context(psycopg.connect(settings.database_url))
         cache_conn = None if no_cache else stack.enter_context(cache.connect(settings.database_url))
-        table, embedder_name, dims = harness.pipeline_index(conn, cfg.pipeline)
-        corpus_ids = corpora.document_ids(conn, cfg.corpus, table)
-        rr = resolve_spec(cfg.retriever).get("rerank")
-        embedder = make_embedder(embedder_name, dims, settings)
-        reranker = make_reranker(rr["model"], settings) if rr else None
-        if cache_conn is not None:
-            embedder = cache.CachedEmbedder(embedder, cache_conn)
-            reranker = cache.CachedReranker(reranker, cache_conn) if reranker else None
-        retriever = make_retriever(conn, cfg.retriever, table, embedder, corpus_ids, reranker)
-        scoper = make_scoper(conn, cfg.retriever.get("scope"), corpus_ids, CORPUS / "companies.csv")
+        try:
+            side = setup.retrieval_side(conn, cfg, settings, CORPUS / "companies.csv", cache_conn)
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1) from e
+        retriever, scoper, router = side.retriever, side.scoper, side.router
         spec = cfg.backend_spec
         backend = make_backend(spec) if spec else None  # None: retrieval-only run
         prompt = get_prompt(cfg.generation["prompt"]) if cfg.generation else None
-        router = make_router(conn, cfg.router)
-        if router is not None and scoper is None:
-            typer.echo("[router] needs [retriever.scope]: facts anchor on the scope", err=True)
-            raise typer.Exit(1)
         subset = None
         if only:
             subset = {ln.strip() for ln in Path(only).read_text().splitlines() if ln.strip()}

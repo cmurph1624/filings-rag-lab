@@ -1,0 +1,24 @@
+# Retrieval gate (P3 PR 3): the P2 best config's retrieval (run 846's: structured@1 + rules
+# scope + rerank-3 + rules router, so the fact route runs too), retrieval-only, on the gate
+# corpus. `frl gate --pipeline` swaps the pipeline.
+name = "gate-best"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-gate@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5
