@@ -15,7 +15,7 @@ from filings_rag.edgar.client import EdgarClient
 from filings_rag.embed.factory import make_embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import judge as judging
-from filings_rag.eval import labels, report, routes
+from filings_rag.eval import labels, noise, report, routes
 from filings_rag.facts import concepts, coverage, lookup, metrics
 from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
@@ -291,6 +291,47 @@ def route_facts_cmd(run_id: int = typer.Argument(..., help="A run made with a [r
             typer.echo(f"  {c.question_id[16:]}  gold {c.gold}  fact {c.shown or '–'}")
 
 
+@app.command("noise")
+def noise_cmd(
+    run_ids: Annotated[list[int], typer.Argument(help="Runs of the same config (two or more)")],
+    replicates: int = typer.Option(
+        1, help="Also compare the first run's judge replicates 1..N (`frl judge --replicate`)"
+    ),
+    out: str = typer.Option("", help="Also write the markdown to this file"),
+) -> None:
+    """How much results move when nothing changes: generation, judge, retrieval, facts."""
+    if len(run_ids) < 2 and replicates < 2:
+        typer.echo("give two or more runs, or --replicates 2+", err=True)
+        raise typer.Exit(1)
+    with psycopg.connect(get_settings().database_url) as conn:
+        try:
+            runs = [noise.load(conn, r) for r in run_ids]
+            reps = [noise.load(conn, run_ids[0], i) for i in range(1, replicates + 1)]
+        except ValueError as e:
+            typer.echo(f"cannot compare: {e}", err=True)
+            raise typer.Exit(1) from e
+    problems = noise.check_comparable(runs) + noise.check_comparable(reps, replicates=True)
+    if problems:
+        typer.echo("cannot compare:\n  " + "\n  ".join(problems), err=True)
+        raise typer.Exit(1)
+    gen = noise.agreement([(f"run {r.run_id}", r.verdicts) for r in runs])
+    judge = (
+        noise.agreement([(r.judge.split(":")[-1], r.verdicts) for r in reps])
+        if replicates > 1
+        else None
+    )
+    text = noise.render(
+        gen,
+        judge,
+        noise.identical_share([r.retrieved for r in runs]),
+        noise.identical_share([{q: sorted(v) for q, v in r.retrieved.items()} for r in runs]),
+        noise.identical_share([r.facts for r in runs], skip_empty=True),
+    )
+    if out:
+        Path(out).write_text(text)
+    typer.echo(text)
+
+
 @facts_app.command("coverage")
 def facts_coverage_cmd(
     out: str = typer.Option("", help="Also write the markdown to this file"),
@@ -406,6 +447,11 @@ def judge_cmd(
     only: str = typer.Option(
         "", help="Only these question ids (a file, one per line): disjoint shards run in parallel"
     ),
+    replicate: int = typer.Option(
+        1,
+        help="Judge again as replicate N (>= 2): verdicts are stored under the judge key with"
+        " '#rN', leaving the run's own verdicts untouched. For measuring judge agreement.",
+    ),
 ) -> None:
     """Grade a run's answers with the judge pinned in its config (resumable)."""
     with psycopg.connect(get_settings().database_url) as conn:
@@ -441,11 +487,15 @@ def judge_cmd(
                 raise typer.Exit(1)
             if missing := sorted(shard - answered):
                 typer.echo(f"--only: {len(missing)} ids have no answer in run {run_id}", err=True)
-        typer.echo(f"run {run_id}: judging with {cfg.judge_key}")
+        if replicate < 1:
+            typer.echo("--replicate must be 1 or more", err=True)
+            raise typer.Exit(1)
+        judge_key = cfg.judge_key if replicate == 1 else f"{cfg.judge_key}#r{replicate}"
+        typer.echo(f"run {run_id}: judging with {judge_key}")
         s = judging.judge_run(
             conn,
             run_id,
-            cfg.judge_key,
+            judge_key,
             make_backend(cfg.judge_spec),
             get_judge_prompt(cfg.judge["prompt"]),
             concurrency=cfg.execution["concurrency"],
