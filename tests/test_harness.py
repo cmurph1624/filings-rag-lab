@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from filings_rag.harness.config import from_dict, load
-from filings_rag.harness.prompts import JUDGE_PROMPTS, PROMPTS, get_prompt
+from filings_rag.harness.prompts import FAITHFUL_PROMPTS, JUDGE_PROMPTS, PROMPTS, get_prompt
 from filings_rag.retrieve.base import Hit
 from filings_rag.retrieve.factory import make_retriever
 
@@ -17,6 +17,7 @@ PINNED = {
     "answer@4": "246950f37f3b5cb9",
 }
 PINNED_JUDGE = {"judge@1": "d22124b2220d1927"}
+PINNED_FAITHFUL = {"faithful@1": "bc607e1b4ea68c04"}
 
 
 def base() -> dict:  # type: ignore[type-arg]
@@ -84,6 +85,13 @@ def test_judge_prompts_are_not_edited_in_place(ref: str) -> None:
     p = JUDGE_PROMPTS[ref]
     digest = hashlib.sha256(f"{p.system}\0{p.template}".encode()).hexdigest()[:16]
     assert PINNED_JUDGE.get(ref) == digest, f"{ref} changed: add a new version instead"
+
+
+@pytest.mark.parametrize("ref", sorted(FAITHFUL_PROMPTS))
+def test_faithful_prompts_are_not_edited_in_place(ref: str) -> None:
+    p = FAITHFUL_PROMPTS[ref]
+    digest = hashlib.sha256(f"{p.system}\0{p.template}".encode()).hexdigest()[:16]
+    assert PINNED_FAITHFUL.get(ref) == digest, f"{ref} changed: add a new version instead"
 
 
 def test_judge_key_names_backend_model_effort_and_prompt() -> None:

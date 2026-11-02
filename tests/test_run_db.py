@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 
@@ -497,3 +498,48 @@ def test_rerank_spend_is_recorded_on_the_row(conn: psycopg.Connection) -> None: 
         "rerank": {"model": "rerank-3", "tokens": 2000, "cost_usd": 1e-4}
     }
     assert stats.aux_cost == pytest.approx(2e-4)
+
+
+def test_faithfulness_then_report(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag.eval.faithful import contexts, faithful_run, judge_key
+    from filings_rag.eval.report import render, summarize
+    from filings_rag.harness.prompts import get_faithful_prompt
+
+    c = cfg()
+    rid, _ = run(conn, FakeBackend(fail={QIDS[3]}))
+    ctx = contexts(conn, rid, c, get_prompt("answer@1"))
+    assert sorted(ctx) == QIDS[:3]  # QIDS[3] has no answer
+    assert f"Question: question {QIDS[0]}?" in ctx[QIDS[0]][0] and ctx[QIDS[0]][1] == "42"
+    labels = ["supported", "supported", "contradicted", "unsupported"]
+    claims = json.dumps(
+        {"claims": [{"claim": f"c{i}", "support": x} for i, x in enumerate(labels)]}
+    )
+    j = FakeJudge({QIDS[0]: claims, QIDS[1]: '{"claims": []}', QIDS[2]: "not json"})
+    prompt = get_faithful_prompt("faithful@1")
+    gen = get_prompt("answer@1")
+    s = faithful_run(conn, rid, c, j, prompt, gen, log=lambda s: None)
+    assert (s.judged, s.failed, s.skipped, j.calls) == (2, 1, 0, 3)
+    key = judge_key(c)
+    assert key == "fake:claude-opus-5-5:faithful@1"
+    row = conn.execute(
+        "SELECT supported, unsupported, contradicted FROM faithfulness"
+        " WHERE run_id = %s AND question_id = %s AND judge = %s",
+        (rid, QIDS[0], key),
+    ).fetchone()
+    assert row == (2, 1, 1)
+    again = FakeJudge({QIDS[2]: '{"claims": [{"claim": "x", "support": "supported"}]}'})
+    s2 = faithful_run(conn, rid, c, again, prompt, gen, log=lambda s: None)
+    assert (s2.judged, s2.skipped, again.calls) == (1, 2, 1)  # only the failed one retried
+    assert conn.execute(
+        "SELECT attempts, supported, input_tokens FROM faithfulness"
+        " WHERE run_id = %s AND question_id = %s",
+        (rid, QIDS[2]),
+    ).fetchone() == (2, 1, 100)
+
+    summary = summarize(conn, rid)
+    assert summary.faith == {QIDS[0]: (2, 1, 1), QIDS[1]: (0, 0, 0), QIDS[2]: (1, 0, 0)}
+    md = render([summary])
+    assert "| faithfulness: answers checked | 100.0% (3/3) |" in md
+    assert "| claims supported | 60.0% (3/5) |" in md
+    assert "| answers with a contradicted claim | 33.3% (1/3) |" in md
+    assert "| period: right | – |" in md  # no route labels for this set

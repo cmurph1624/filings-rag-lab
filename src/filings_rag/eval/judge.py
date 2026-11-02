@@ -7,7 +7,7 @@ stored with `error` (and its tokens) and retried on the next pass.
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any
@@ -79,6 +79,48 @@ ON CONFLICT (run_id, question_id, judge) DO UPDATE SET
 """
 
 
+Job = tuple[str, str, str]  # question id, system prompt, user prompt
+
+
+def call_all(
+    jobs: Iterable[Job],
+    backend: ModelBackend,
+    record: Callable[[str, Result | None, str | None], None],
+    stats: JudgeStats,
+    concurrency: int,
+) -> None:
+    """Send each job to the backend, at most `concurrency` at once, and `record` each outcome
+    on this thread (result or error). A usage pause sets `stats.paused`, records nothing for
+    that job and stops submitting; calls already in flight still finish."""
+
+    def settle(fut: "Future[Result]", qid: str) -> None:
+        result: Result | None = None
+        error: str | None = None
+        try:
+            result = fut.result()
+        except UsagePaused as e:  # nothing spent; the next pass picks it up
+            stats.paused = str(e)
+            return
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        record(qid, result, error)
+
+    in_flight: dict[Future[Result], str] = {}
+    with ThreadPoolExecutor(max(1, concurrency)) as pool:
+        for qid, system, text in jobs:
+            if stats.paused:
+                break
+            in_flight[pool.submit(backend.generate, system, text)] = qid
+            while len(in_flight) >= max(1, concurrency):
+                finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for f in finished:
+                    settle(f, in_flight.pop(f))
+        while in_flight:
+            finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for f in finished:
+                settle(f, in_flight.pop(f))
+
+
 def judge_run(
     conn: psycopg.Connection[Any],
     run_id: int,
@@ -146,35 +188,12 @@ def judge_run(
             stats.failed += 1
             log(f"  FAIL      {qid:24} {error[:200]}")
 
-    def settle(fut: "Future[Result]", qid: str) -> None:
-        result: Result | None = None
-        error: str | None = None
-        try:
-            result = fut.result()
-        except UsagePaused as e:  # nothing spent; re-running `frl judge` picks it up
-            stats.paused = str(e)
-            return
-        except Exception as e:
-            error = f"{type(e).__name__}: {e}"
-        record(qid, result, error)
-
-    in_flight: dict[Future[Result], str] = {}
-    with ThreadPoolExecutor(max(1, concurrency)) as pool:
-        for qid, question, gold, justification, answer, done in rows:
-            if done:
-                continue
-            if stats.paused:
-                break
-            text = prompt.render(question, gold, justification, answer)
-            in_flight[pool.submit(backend.generate, prompt.system, text)] = qid
-            while len(in_flight) >= max(1, concurrency):
-                finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
-                for f in finished:
-                    settle(f, in_flight.pop(f))
-        while in_flight:
-            finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
-            for f in finished:
-                settle(f, in_flight.pop(f))
+    jobs = (
+        (qid, prompt.system, prompt.render(question, gold, justification, answer))
+        for qid, question, gold, justification, answer, done in rows
+        if not done
+    )
+    call_all(jobs, backend, record, stats, concurrency)
     if stats.paused:
         log(
             f"paused by the usage governor: {stats.paused}. Re-run `frl judge {run_id}`"
