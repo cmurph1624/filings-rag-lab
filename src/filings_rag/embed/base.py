@@ -7,7 +7,9 @@ InputType = Literal["document", "query"]
 @dataclass(frozen=True)
 class Embeddings:
     vectors: list[list[float]]
-    tokens: int
+    tokens: int  # billed by this call
+    cached: int = 0  # texts served from the embedding cache
+    cached_tokens: int = 0  # what those cost when they were first embedded (not billed again)
 
 
 class Embedder(Protocol):

@@ -135,3 +135,62 @@ def test_tokens_recorded_even_when_insert_fails(conn: psycopg.Connection) -> Non
     assert conn.execute(
         "SELECT embed_tokens FROM pipelines WHERE name = 'zz-test' AND version = 1"
     ).fetchone() == (40,)
+
+
+class TenChunks(NaiveFixed):
+    """Ten fixed chunks; `changed` chunks get new text, as a new pipeline version would."""
+
+    name = "zz-test"
+
+    def __init__(self, version: int, changed: frozenset[int] = frozenset()) -> None:
+        super().__init__(version=version, window_words=10, overlap_words=2)
+        self.changed = changed
+
+    @property
+    def params(self) -> dict[str, object]:
+        return {"changed": sorted(self.changed)}
+
+    def chunk(self, doc: Doc) -> list[Chunk]:
+        return [
+            Chunk(i, 0, 1, 1, f"zz chunk {i}" + (" edited" if i in self.changed else ""))
+            for i in range(10)
+        ]
+
+
+def test_new_version_embeds_only_changed_chunks(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
+    from filings_rag import cache
+
+    class Fake(FakeEmbedder):
+        name = "zz-fake-embed"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.texts: list[str] = []
+
+        def embed(self, texts: list[str], input_type: InputType) -> Embeddings:
+            self.texts += texts
+            return super().embed(texts, input_type)
+
+    inner = Fake()
+    with cache.connect(os.environ["DATABASE_URL"]) as cc:
+        try:
+            e = cache.CachedEmbedder(inner, cc)
+            first = build(conn, TenChunks(1), e, docs=[DOC], log=lambda s: None)
+            assert (first.chunks, first.embed_tokens, first.cached_chunks) == (10, 50, 0)
+            second = build(conn, TenChunks(2, frozenset({9})), e, docs=[DOC], log=lambda s: None)
+            assert inner.texts[10:] == ["zz chunk 9 edited"]  # only the 10% that changed
+            assert (second.chunks, second.embed_tokens) == (10, 5)
+            assert (second.cached_chunks, second.cached_tokens) == (9, 45)
+            assert conn.execute(
+                "SELECT embed_tokens, embed_cached_tokens FROM pipelines"
+                " WHERE name = 'zz-test' AND version = 2"
+            ).fetchone() == (5, 45)
+            v1, v2 = (
+                conn.execute(
+                    f"SELECT embedding::text FROM chunks__zz_test__v{v} WHERE ord = 0"
+                ).fetchone()
+                for v in (1, 2)
+            )
+            assert v1 == v2  # a cached vector is the one stored the first time
+        finally:
+            cc.execute("DELETE FROM embedding_cache WHERE embedder = 'zz-fake-embed'")

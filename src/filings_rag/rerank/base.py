@@ -9,6 +9,7 @@ from typing import Protocol
 class Reranked:
     order: list[tuple[int, float]]  # (index into the input texts, relevance), best first
     tokens: int  # billed tokens, from the API's usage
+    cached_tokens: int = 0  # a cache hit: what it cost first time (tokens is then 0)
 
 
 class Reranker(Protocol):

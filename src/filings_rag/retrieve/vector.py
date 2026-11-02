@@ -6,6 +6,7 @@
   pgvector's iterative scan (strict order) keeps fetching until k rows pass it.
 """
 
+from dataclasses import replace
 from typing import Any
 
 import psycopg
@@ -77,6 +78,9 @@ class VectorRetriever:
     def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
         """`documents` replaces the corpus filter for this query (a scope within the corpus)."""
         out = self._embedder.embed([query], "query")
+        # A cached query vector still counts its tokens (a few dozen), so runs compare as
+        # deployed systems; the reranker's cache hits are kept apart in its spend instead.
+        out = replace(out, tokens=out.tokens + out.cached_tokens)
         filtered = documents is not None or self.documents is not None
         try:
             hits = self.query(out.vectors[0], documents)

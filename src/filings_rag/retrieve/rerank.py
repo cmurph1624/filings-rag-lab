@@ -36,4 +36,6 @@ class RerankingRetriever:
             "tokens": out.tokens,
             "cost_usd": rerank_cost(self._reranker.name, out.tokens),
         }
+        if out.cached_tokens:  # a cache hit: tokens and cost are 0, the report prices it
+            spend["cached_tokens"] = out.cached_tokens
         return Retrieval(hits, first.embed_tokens, first.embedder, {**first.aux, "rerank": spend})

@@ -19,7 +19,9 @@ class BuildStats:
     documents: int = 0
     empty: int = 0
     chunks: int = 0
-    embed_tokens: int = 0
+    embed_tokens: int = 0  # billed
+    cached_chunks: int = 0  # chunks whose vector came from the embedding cache
+    cached_tokens: int = 0  # what those cost when first embedded
 
 
 def register(conn: psycopg.Connection[Any], p: IngestPipeline, e: Embedder) -> str:
@@ -93,9 +95,9 @@ def build(
         out = e.embed([c.text for c in chunks], "document")
         # Record spend first, in its own commit: tokens count as spent even if the insert fails.
         conn.execute(
-            "UPDATE pipelines SET embed_tokens = embed_tokens + %s"
-            " WHERE name = %s AND version = %s",
-            (out.tokens, p.name, p.version),
+            "UPDATE pipelines SET embed_tokens = embed_tokens + %s,"
+            " embed_cached_tokens = embed_cached_tokens + %s WHERE name = %s AND version = %s",
+            (out.tokens, out.cached_tokens, p.name, p.version),
         )
         conn.commit()
         # A real transaction per document: a crash resumes cleanly.
@@ -122,7 +124,10 @@ def build(
         stats.documents += 1
         stats.chunks += len(chunks)
         stats.embed_tokens += out.tokens
-        log(f"  {doc_name:40} {len(chunks):>5} chunks {out.tokens:>9,} tokens")
+        stats.cached_chunks += out.cached
+        stats.cached_tokens += out.cached_tokens
+        cached = f" ({out.cached:,} cached)" if out.cached else ""
+        log(f"  {doc_name:40} {len(chunks):>5} chunks {out.tokens:>9,} tokens{cached}")
     conn.execute(
         sql.SQL(
             "CREATE INDEX IF NOT EXISTS {i} ON {t} USING hnsw (embedding vector_cosine_ops)"

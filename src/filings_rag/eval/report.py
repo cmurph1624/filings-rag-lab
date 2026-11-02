@@ -13,7 +13,7 @@ from filings_rag.eval.routes import RouteLabel
 from filings_rag.harness.config import from_dict
 from filings_rag.harness.prompts import citations
 from filings_rag.ingest.registry import get_pipeline
-from filings_rag.pricing import Usage, batch_api_cost, load_prices, plain_api_cost
+from filings_rag.pricing import Usage, batch_api_cost, load_prices, plain_api_cost, rerank_cost
 from filings_rag.retrieve.factory import resolve_spec
 
 KS = (1, 3, 5, 10)
@@ -173,11 +173,13 @@ def summarize(conn: psycopg.Connection[Any], run_id: int) -> RunSummary:
         for component, a in aux.items():  # spend is recorded on failed rows too
             cost = float(a["cost_usd"])
             # Model calls get the three views; a reranker bills tokens at one rate in all views.
-            views = (
-                _views(a["model"], Usage(**a["usage"]), cost)
-                if "usage" in a
-                else dict.fromkeys(COST_VIEWS, cost)
-            )
+            # A rerank served from the cache billed nothing (as recorded) but is priced in the
+            # comparable views, so runs compare as deployed systems.
+            if "usage" in a:
+                views = _views(a["model"], Usage(**a["usage"]), cost)
+            else:
+                full = rerank_cost(a["model"], a["tokens"] + a.get("cached_tokens", 0))
+                views = {**dict.fromkeys(COST_VIEWS, full), "as recorded": cost}
             _add(s.aux_cost, views)
             s.component_cost[component] = s.component_cost.get(component, 0.0) + views["plain API"]
         if scope is not None:
