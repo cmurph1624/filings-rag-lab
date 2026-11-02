@@ -227,7 +227,8 @@ def summarize(
                 " WHERE run_id = %s AND judge = %s AND claims IS NOT NULL",
                 (run_id, s.faithful_judge),
             ):
-                s.faith[qid] = (n[0], n[1], n[2])
+                if s.verdict_of.get(qid) != "refused":  # a refusal has no claims to check
+                    s.faith[qid] = (n[0], n[1], n[2])
     s.retrieval, s.unlabelled = rmetrics.load(conn, run_id, cfg.pipeline)
     conn.commit()
     return s
@@ -408,6 +409,9 @@ def _generation(heads: list[str], rows: Rows) -> list[str]:
         sup, uns, con = (sum(n[i] for n in s.faith.values()) for i in range(3))
         return sup, uns, con
 
+    def _not_refused(s: RunSummary) -> int:
+        return s.answered - sum(v == "refused" for v in s.verdict_of.values())
+
     def faith(fn: Any) -> Any:
         return _gen(lambda s: fn(s) if s.faith else "–")
 
@@ -421,7 +425,7 @@ def _generation(heads: list[str], rows: Rows) -> list[str]:
         "",
         "*Faithfulness* (`faithful@1`, the run's judge model): each checkable claim in the "
         "answer, labelled against the context the generator was given (excerpts and Facts), "
-        "not against the gold answer.",
+        "not against the gold answer. Over answers not judged refused.",
         "",
         _table(
             heads,
@@ -429,7 +433,10 @@ def _generation(heads: list[str], rows: Rows) -> list[str]:
                 ("period: right", period("right")),
                 ("period: wrong", period("wrong")),
                 ("period: none stated", period("none")),
-                ("faithfulness: answers checked", faith(lambda s: _pct(len(s.faith), s.answered))),
+                (
+                    "faithfulness: answers checked",
+                    faith(lambda s: _pct(len(s.faith), _not_refused(s))),
+                ),
                 (
                     "claims supported",
                     faith(lambda s: _pct(claims(s)[0], sum(claims(s)))),

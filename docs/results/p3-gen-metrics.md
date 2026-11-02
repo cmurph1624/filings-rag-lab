@@ -21,7 +21,7 @@ with `frl faithful <run>` for each run, then `frl report 846 --vs 638 --vs 922`.
   - for a quarter, that quarter or its fiscal year.
 
   *Wrong* means the answer states periods, but not that one. *None* means it states no period.
-  Answers judged refused are left out.
+  Answers judged refused are left out of both metrics.
 - **Faithfulness** (`faithful@1`, using the run's judge model) lists each checkable claim in
   an answer. It labels each claim *supported*, *unsupported* or *contradicted* against the
   context the generator was given. That context is the Facts block and the retrieved excerpts,
@@ -37,11 +37,11 @@ with `frl faithful <run>` for each run, then `frl report 846 --vs 638 --vs 922`.
 | period: right | 98.7% (147/149) | 98.6% (138/140) | 98.7% (147/149) |
 | period: wrong | 0.7% (1/149) | 1.4% (2/140) | 1.3% (2/149) |
 | period: none stated | 0.7% (1/149) | 0.0% (0/140) | 0.0% (0/149) |
-| claims supported | 97.5% (1298/1331) | 97.9% (1237/1263) | 97.2% (1309/1347) |
-| claims unsupported | 27 | 18 | 29 |
+| claims supported | 97.5% (1294/1327) | 97.9% (1185/1210) | 97.2% (1306/1343) |
+| claims unsupported | 27 | 17 | 28 |
 | claims contradicted | 6 | 8 | 9 |
-| answers with a contradicted claim | 4.0% (6/150) | 5.3% (8/150) | 6.0% (9/150) |
-| answers fully supported | 83.3% (125/150) | 87.3% (131/150) | 80.0% (120/150) |
+| answers with a contradicted claim | 4.0% (6/149) | 5.7% (8/140) | 6.0% (9/149) |
+| answers fully supported | 83.2% (124/149) | 87.1% (122/140) | 80.5% (120/149) |
 
 Faithfulness against judge@1 verdicts:
 
@@ -72,7 +72,7 @@ Refusals are left out: 1, 10 and 1 answers.
   (1.43% for 1.42%) and side figures read from the wrong column or year. They are usually not
   the headline figure, so the correctness judge passes most of these answers.
 - **answer@4 adds claims, not hallucination.** answer@1 (run 638) refuses 10 questions and
-  writes shorter answers, so it has fewer unsupported claims (18 against 27). Decomposition
+  writes shorter answers, so it has fewer unsupported claims (17 against 27). Decomposition
   (run 922) retrieves more and has slightly more unsupported and contradicted claims. The
   differences are a handful of claims, which is within what one would expect from noise at
   this size (see `p3-noise.md`).
