@@ -5,7 +5,12 @@ from filings_rag.ingest.table_preserving import TablePreserving
 
 # name -> version -> pipeline. Add versions; never edit a built one.
 PIPELINES: dict[str, dict[int, IngestPipeline]] = {
-    "naive-fixed": {1: NaiveFixed(version=1, window_words=350, overlap_words=50)},
+    "naive-fixed": {
+        1: NaiveFixed(version=1, window_words=350, overlap_words=50),
+        # P3 PR 4 proof: deliberately bad, 60-word windows with no overlap split tables mid-row.
+        # The retrieval gate must block it; this PR is closed unmerged.
+        2: NaiveFixed(version=2, window_words=60, overlap_words=0),
+    },
     "table-preserving": {1: TablePreserving(version=1)},  # defaults pinned by its test
     "structured": {1: Structured(version=1)},  # table-preserving@1 + headers; pinned by test
 }
