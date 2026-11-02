@@ -72,3 +72,26 @@ def test_repo_gate_config_loads() -> None:
     root = Path(__file__).resolve().parents[1]
     g = gate.load_config(root / "config/gate.toml", root)
     assert all(c.config.exists() for c in g.checks)
+
+
+def test_a_passage_the_candidate_cannot_label_counts_as_not_found() -> None:
+    q = QIDS[0]
+    base = _m(BASE)
+    base.retrieval[q] = QuestionRetrieval(q, [1, 2], (0, 1))
+    cand = _m(BASE)
+    cand.retrieval[q] = QuestionRetrieval(q, [2], (1,))  # passage 0 lost its label
+    r = gate.compare("c", base, cand, ALLOWED)
+    assert r.passages_lost == 1
+    recall = next(x for x in r.rows if x.metric == "recall_at_10")
+    assert recall.candidate < recall.baseline  # not flat: the lost passage stays in the pool
+    assert "1 of the baseline's 150 labelled evidence passages" in gate.render([r], "g")
+
+
+def test_passages_align_by_evidence_index_not_position() -> None:
+    q = QIDS[0]
+    base, cand = _m(BASE), _m(BASE)
+    base.retrieval[q] = QuestionRetrieval(q, [1, 2], (0, 1))
+    cand.retrieval[q] = QuestionRetrieval(q, [1, None], (0, 1))  # passage 1 dropped out
+    r = gate.compare("c", base, cand, ALLOWED)
+    assert r.passages_lost == 0
+    assert next(x for x in r.rows if x.metric == "recall_at_10").candidate < 1.0

@@ -2,10 +2,10 @@
 
 `config/gate.toml` names the gated configs, each with its baseline run, and the allowed drop
 per metric. The candidate is the same config, optionally with another pipeline, run at the
-current code. Metrics are computed over the baseline's scored questions. A question the
-candidate can't score (its pipeline's chunks don't hold the evidence any more) counts as
-evidence not found: dropping it instead would let a broken chunker raise recall by shrinking
-the pool.
+current code. Metrics are computed over the baseline's labelled evidence passages. A passage
+the candidate's pipeline can't label (its chunks don't hold that evidence any more) counts as
+not found, and so does a question with none left: dropping them instead would let a broken
+chunker raise recall by shrinking the pool.
 
 recall@k favours bigger chunks (more text per chunk holds evidence more often), so the verdict
 also shows how many words of context each run retrieves, and flags a candidate that retrieves
@@ -84,7 +84,8 @@ def measure(conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteL
     words = conn.execute(
         sql.SQL(
             r"""SELECT avg(w) FROM (
-                 SELECT r.question_id, sum(array_length(regexp_split_to_array(c.text, '\s+'), 1)) w
+                 SELECT r.question_id,
+                        sum(array_length(regexp_split_to_array(btrim(c.text), '\s+'), 1)) w
                  FROM run_questions r CROSS JOIN jsonb_array_elements(r.retrieved) h
                  JOIN {t} c ON c.id = (h->>'chunk_id')::bigint
                  WHERE r.run_id = %s GROUP BY 1) x"""
@@ -115,6 +116,7 @@ class CheckResult:
     rows: list[Row]
     lost: list[tuple[str, int | None, int | None]] = field(default_factory=list)  # qid, ranks
     unscored: list[str] = field(default_factory=list)  # scored in the baseline, not candidate
+    passages_lost: int = 0  # baseline-labelled passages the candidate couldn't label
     facts_lost: list[str] = field(default_factory=list)
 
     @property
@@ -126,11 +128,10 @@ def compare(name: str, base: Measured, cand: Measured, allowed: dict[str, float]
     qids = sorted(base.retrieval)
     unscored = [q for q in qids if q not in cand.retrieval]
     b = [base.retrieval[q] for q in qids]
-    c = [
-        cand.retrieval.get(q)
-        or rmetrics.QuestionRetrieval(q, [None] * len(base.retrieval[q].found_at))
-        for q in qids
-    ]
+    c = [_align(base.retrieval[q], cand.retrieval.get(q)) for q in qids]
+    passages_lost = sum(
+        len(x.found_at) - _labelled(x, cand.retrieval.get(x.question_id)) for x in b
+    )
     rows = [
         Row("recall_at_10", rmetrics.recall_at(b, 10), rmetrics.recall_at(c, 10),
             allowed["recall_at_10"]),
@@ -149,7 +150,34 @@ def compare(name: str, base: Measured, cand: Measured, allowed: dict[str, float]
         b_ok = sum(base.facts.values())
         c_ok = sum(cf.get(q, False) for q in base.facts)
         rows.append(Row("fact_correct", b_ok, c_ok, allowed["fact_correct"]))
-    return CheckResult(name, base, cand, rows, lost, unscored, facts_lost)
+    return CheckResult(
+        name, base, cand, rows, lost=lost, unscored=unscored, passages_lost=passages_lost,
+        facts_lost=facts_lost,
+    )  # fmt: skip
+
+
+def _align(
+    base: rmetrics.QuestionRetrieval, cand: rmetrics.QuestionRetrieval | None
+) -> rmetrics.QuestionRetrieval:
+    """The candidate's ranks for the baseline's passages, None where it has no label."""
+    if cand is None:
+        return rmetrics.QuestionRetrieval(base.question_id, [None] * len(base.found_at))
+    if base.passages and cand.passages:
+        rank = dict(zip(cand.passages, cand.found_at, strict=True))
+        return rmetrics.QuestionRetrieval(
+            base.question_id, [rank.get(i) for i in base.passages], base.passages
+        )
+    pad = max(0, len(base.found_at) - len(cand.found_at))  # no passage ids: by position
+    return rmetrics.QuestionRetrieval(base.question_id, cand.found_at + [None] * pad)
+
+
+def _labelled(base: rmetrics.QuestionRetrieval, cand: rmetrics.QuestionRetrieval | None) -> int:
+    """How many of the baseline's passages the candidate has labels for."""
+    if cand is None:
+        return 0
+    if base.passages and cand.passages:
+        return len(set(base.passages) & set(cand.passages))
+    return min(len(base.found_at), len(cand.found_at))
 
 
 def _fmt(metric: str, v: float) -> str:
@@ -195,6 +223,13 @@ def render(results: list[CheckResult], corpus: str) -> str:
                 " chunks, so a recall gain here may not mean better answers: run the answer"
                 " eval (`eval:full`) before trusting it."
             )
+        if r.passages_lost:
+            n = sum(len(q.found_at) for q in r.baseline.retrieval.values())
+            lines += [
+                "",
+                f"{r.passages_lost} of the baseline's {n} labelled evidence passages have no"
+                " label in the candidate's pipeline (counted as not found).",
+            ]
         if r.unscored:
             lines += [
                 "",

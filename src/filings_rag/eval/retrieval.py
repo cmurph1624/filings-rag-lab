@@ -6,7 +6,7 @@ top k; hit@k is whether any passage was found in the top k; MRR uses the rank of
 retrieved chunk that holds any evidence. Questions with no labelled passage are not scored.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import psycopg
@@ -18,6 +18,7 @@ from filings_rag.ingest.registry import get_pipeline
 class QuestionRetrieval:
     question_id: str
     found_at: list[int | None]  # per labelled passage: best rank of its chunks, or None
+    passages: tuple[int, ...] = ()  # the evidence_idx of each found_at entry, when known
 
     @property
     def first_rank(self) -> int | None:
@@ -71,5 +72,7 @@ def load(
             unlabelled += 1
             continue
         ids = [int(h["chunk_id"]) for h in retrieved]
-        scored.append(score(qid, ids, list(labels[qid].values())))
+        idxs = sorted(labels[qid])
+        q = score(qid, ids, [labels[qid][i] for i in idxs])
+        scored.append(replace(q, passages=tuple(idxs)))
     return scored, unlabelled

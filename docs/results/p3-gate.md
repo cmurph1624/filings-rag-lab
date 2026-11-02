@@ -37,8 +37,8 @@ scores the same every time. A new pipeline shifts which chunks hold each evidenc
 recall@10, hit@10 and MRR each allow a drop of 0.01 (one question of 149 is 0.0067). The fact
 route is deterministic, so no fact check may be lost.
 
-A question the candidate's pipeline can't label (its chunks don't hold the evidence any more)
-counts as not found. Dropping it instead would let a broken chunker raise recall by shrinking
+An evidence passage the candidate's pipeline can't label (its chunks don't hold it any more), matched by its evidence index,
+counts as not found, and the verdict says how many. Dropping it instead would let a broken chunker raise recall by shrinking
 the pool.
 
 ## Checks run
