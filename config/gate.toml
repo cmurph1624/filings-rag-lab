@@ -1,0 +1,23 @@
+# The retrieval gate (P3 PR 3, `frl gate`). Moving a baseline is a reviewed change to this file:
+# run the config at the new code (`frl run configs/gate-*.toml`) and pin the new run id.
+#
+# Thresholds come from docs/results/p3-noise.md. With the embedding and rerank caches (PR 2)
+# retrieval is exactly repeatable, so an unchanged config scores the same every time and any
+# drop is real. A different pipeline shifts which chunks hold each evidence passage, so each
+# retrieval metric allows one question's worth of drop (1/149 scored questions = 0.0067).
+# The fact route is deterministic: no fact check may be lost.
+corpus = "fb-gate@1"
+
+[allowed_drop]
+recall_at_10 = 0.01
+hit_at_10 = 0.01
+mrr = 0.01
+fact_correct = 0
+
+[[check]]  # the P2 best config's retrieval: scope + rerank-3 + rules router (fact route)
+config = "configs/gate-best.toml"
+baseline = 1079  # structured@1, 2026-11-01: recall@10 0.833, hit@10 0.886, MRR 0.651, facts 48/50
+
+[[check]]  # plain vector top-10: no scope or reranker to hide a chunking regression
+config = "configs/gate-vector.toml"
+baseline = 1080  # structured@1, 2026-11-01: recall@10 0.521, hit@10 0.557, MRR 0.282

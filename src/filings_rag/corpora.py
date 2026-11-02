@@ -29,6 +29,13 @@ CORPORA: dict[str, dict[int, Corpus]] = {
             ("manifest.csv", "distractors.csv"),
         )
     },
+    "fb-gate": {
+        1: Corpus(
+            "the retrieval gate's corpus (P3): question filings plus each one's next filing of "
+            "the same form (FY+1), which repeats the question year's figures as comparatives",
+            ("manifest.csv", "gate_distractors.csv"),
+        )
+    },
 }
 
 
@@ -113,3 +120,17 @@ def document_ids(conn: psycopg.Connection[Any], ref: str, chunk_table: str) -> l
             f"e.g. {unbuilt[:3]}; fetch and build them first"
         )
     return [int(doc_id) for _, doc_id, _ in rows]
+
+
+def doc_names(conn: psycopg.Connection[Any], ref: str) -> list[str]:
+    """The corpus's filings by doc_name (what `ingest.build` takes)."""
+    name, version, _ = parse_ref(ref)
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT d.doc_name FROM corpus_documents c JOIN documents d"
+            " ON d.accession = c.accession WHERE c.corpus = %s AND c.version = %s"
+            " ORDER BY d.doc_name",
+            (name, version),
+        )
+    ]
