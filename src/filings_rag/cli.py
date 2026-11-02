@@ -320,7 +320,8 @@ def noise_cmd(
         gen,
         judge,
         noise.identical_share([r.retrieved for r in runs]),
-        noise.identical_share([r.facts for r in runs]),
+        noise.identical_share([{q: sorted(v) for q, v in r.retrieved.items()} for r in runs]),
+        noise.identical_share([r.facts for r in runs], skip_empty=True),
     )
     if out:
         Path(out).write_text(text)

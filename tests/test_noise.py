@@ -21,9 +21,16 @@ def test_identical_share() -> None:
     assert noise.identical_share([m1, m1, m1]) == (3, 3, [])
 
 
+def test_identical_share_skip_empty() -> None:
+    m1 = {"q1": None, "q2": {"v": 1}, "q3": {"v": 2}}
+    m2 = {"q1": None, "q2": {"v": 1}, "q3": None}
+    assert noise.identical_share([m1, m2]) == (2, 3, ["q3"])
+    assert noise.identical_share([m1, m2], skip_empty=True) == (1, 2, ["q3"])
+
+
 def test_render_lists_unstable_questions() -> None:
     gen = noise.agreement([("run 1", {"financebench_id_00001": "correct"}),
                            ("run 2", {"financebench_id_00001": "refused"})])  # fmt: skip
-    text = noise.render(gen, None, (1, 1, []), (1, 1, []))
+    text = noise.render(gen, None, (1, 1, []), (1, 1, []), (1, 1, []))
     assert "| 00001 | correct / refused | – |" in text
     assert "Spread: 1 questions" in text

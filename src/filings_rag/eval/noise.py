@@ -87,9 +87,15 @@ def agreement(sources: list[tuple[str, dict[str, str]]]) -> Agreement:
     return Agreement(labels, accuracies, unstable, pairwise, len(common))
 
 
-def identical_share(maps: list[dict[str, Any]]) -> tuple[int, int, list[str]]:
-    """(questions whose value is equal in every map, questions in all maps, the others)."""
+def identical_share(
+    maps: list[dict[str, Any]], skip_empty: bool = False
+) -> tuple[int, int, list[str]]:
+    """(questions whose value is equal in every map, questions in all maps, the others).
+
+    `skip_empty` leaves out questions that have no value in any map (e.g. no facts)."""
     common = set.intersection(*(set(m) for m in maps)) if maps else set()
+    if skip_empty:
+        common = {q for q in common if any(m[q] for m in maps)}
     differ = sorted(q for q in common if any(m[q] != maps[0][q] for m in maps[1:]))
     return len(common) - len(differ), len(common), differ
 
@@ -99,8 +105,11 @@ def flip_kinds(unstable: dict[str, list[str]]) -> Counter[str]:
     return Counter("/".join(sorted(set(vs))) for vs in unstable.values())
 
 
-def render(gen: Agreement, judge: Agreement | None, retrieval: tuple[int, int, list[str]],
-           facts: tuple[int, int, list[str]]) -> str:  # fmt: skip
+Share = tuple[int, int, list[str]]
+
+
+def render(gen: Agreement, judge: Agreement | None, retrieval: Share, retrieval_sets: Share,
+           facts: Share) -> str:  # fmt: skip
     def pct(a: int, b: int) -> str:
         return f"{100 * a / b:.1f}% ({a}/{b})" if b else "–"
 
@@ -138,6 +147,7 @@ def render(gen: Agreement, judge: Agreement | None, retrieval: tuple[int, int, l
             f" unstable: {len(judge.unstable)} ({dict(flip_kinds(judge.unstable))}).",
         ]
     same, n, differ = retrieval
+    ssame, sn, sdiffer = retrieval_sets
     fsame, fn, fdiffer = facts
     lines += [
         "",
@@ -145,7 +155,10 @@ def render(gen: Agreement, judge: Agreement | None, retrieval: tuple[int, int, l
         "",
         f"- Retrieved top-k (chunk ids, in order) identical across runs: {pct(same, n)}"
         + (f"; differ: {', '.join(q[16:] for q in differ[:20])}" if differ else ""),
-        f"- Fact route output identical across runs: {pct(fsame, fn)}"
+        f"- Retrieved top-k as a set (order ignored) identical across runs: {pct(ssame, sn)}"
+        + (f"; differ: {', '.join(q[16:] for q in sdiffer[:20])}" if sdiffer else ""),
+        f"- Fact route output identical across runs (questions that got facts):"
+        f" {pct(fsame, fn)}"
         + (f"; differ: {', '.join(q[16:] for q in fdiffer[:20])}" if fdiffer else ""),
         "",
         "## Unstable questions",
