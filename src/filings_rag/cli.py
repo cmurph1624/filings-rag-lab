@@ -453,6 +453,12 @@ def run_cmd(
         f" (generation ${s.gen_cost:.4f}, embedding ${s.embed_cost:.6f},"
         f" scope/rerank models ${s.aux_cost:.4f});"
         f" backend reported ${s.reported_cost:.4f}"
+        + (
+            f"\n  {s.cached_reranks} questions reranked from the cache (not billed here;"
+            " `frl report` prices them in its plain/Batch API views)"
+            if s.cached_reranks
+            else ""
+        )
     )
     if s.paused:  # a clean stop, not a failure: exit 3 like `usage gate`
         raise typer.Exit(3)
