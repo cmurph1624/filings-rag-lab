@@ -59,6 +59,8 @@ class RunSummary:
     period_of: dict[str, str] = field(default_factory=dict)  # question id -> right/wrong/none
     faithful_judge: str = "–"
     faith: dict[str, tuple[int, int, int]] = field(default_factory=dict)  # sup, unsup, contra
+    wall_s: float | None = None  # started_at to finished_at, for a run that has finished
+    gpu_rate: float | None = None  # `gpu_usd_per_hour` in [generation], for a self-hosted model
 
     @property
     def correct(self) -> int:
@@ -68,6 +70,18 @@ class RunSummary:
         """What answering cost: generation, query embedding and other models (the scope
         model). The judge is eval overhead."""
         return self.gen_cost[view] + self.embed_cost + self.aux_cost[view]
+
+    @property
+    def gpu_cost(self) -> float | None:
+        """GPU rental for the run's wall time. None unless the config gives a rate."""
+        if self.gpu_rate is None or self.wall_s is None:
+            return None
+        return self.gpu_rate * self.wall_s / 3600
+
+    def gpu_system_cost(self) -> float | None:
+        """Answering cost with generation costed as GPU time; the other models at plain API."""
+        gpu = self.gpu_cost
+        return None if gpu is None else gpu + self.embed_cost + self.aux_cost["plain API"]
 
 
 def _views(model: str | None, usage: Usage, recorded: float) -> dict[str, float]:
@@ -114,11 +128,13 @@ def summarize(
 ) -> RunSummary:
     """`routes` (hand route labels) adds fiscal-period correctness."""
     row = conn.execute(
-        "SELECT name, config, config_hash, git_sha, git_dirty FROM runs WHERE id = %s", (run_id,)
+        "SELECT name, config, config_hash, git_sha, git_dirty, started_at, finished_at"
+        " FROM runs WHERE id = %s",
+        (run_id,),
     ).fetchone()
     if row is None:
         raise ValueError(f"no run {run_id}")
-    name, raw, config_hash, sha, dirty = row
+    name, raw, config_hash, sha, dirty, started, finished = row
     cfg = from_dict(raw)
     r = resolve_spec(cfg.retriever)
     sc = r.pop("scope", None)
@@ -145,6 +161,9 @@ def summarize(
         generated=generated,
         total=int(total_row[0]) if total_row else 0,
     )
+    if g and g.get("gpu_usd_per_hour") is not None:
+        s.gpu_rate = float(g["gpu_usd_per_hour"])
+        s.wall_s = (finished - started).total_seconds() if finished else None
     for qtype, n in conn.execute(
         "SELECT question_type, count(*) FROM questions WHERE benchmark = %s GROUP BY 1",
         (cfg.questions,),
@@ -250,6 +269,14 @@ def _usd(x: float | None) -> str:
     return "–" if x is None else f"${x:.4f}" if x < 1 else f"${x:.2f}"
 
 
+def _hours(x: float | None) -> str:
+    return "–" if x is None else f"{x / 3600:.2f} h"
+
+
+def _div(x: float | None, n: int) -> float | None:
+    return x / n if x is not None and n else None
+
+
 def _sec(x: float | None) -> str:
     return "–" if x is None else f"{x:.1f}s"
 
@@ -306,7 +333,7 @@ def render(
     if any(s.scopes for s in runs):
         out += _scoping(heads, rows)
     if not retrieval_only:
-        out += _costs(heads, rows)
+        out += _costs(runs, heads, rows)
     latency: list[tuple[str, Any]] = [
         ("retrieval p50", lambda s: _sec(percentile(s.retrieve_s, 50))),
         ("retrieval p95", lambda s: _sec(percentile(s.retrieve_s, 95))),
@@ -541,7 +568,7 @@ def _scoping(heads: list[str], rows: Rows) -> list[str]:
     ]
 
 
-def _costs(heads: list[str], rows: Rows) -> list[str]:
+def _costs(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     cost_rows: list[tuple[str, Any]] = []
     for v in COST_VIEWS:
         cost_rows += [
@@ -556,6 +583,26 @@ def _costs(heads: list[str], rows: Rows) -> list[str]:
             ),
             (f"{v}: judge, total", _gen(lambda s, v=v: _usd(s.judge_cost[v]))),
         ]
+    gpu_note = ""
+    if any(s.gpu_rate is not None for s in runs):
+        cost_rows += [
+            ("GPU-hour: wall time", _gen(lambda s: _hours(s.wall_s) if s.gpu_rate else "–")),
+            ("GPU-hour: answering, total", _gen(lambda s: _usd(s.gpu_system_cost()))),
+            (
+                "GPU-hour: per question",
+                _gen(lambda s: _usd(_div(s.gpu_system_cost(), s.answered))),
+            ),
+            (
+                "GPU-hour: per correct answer",
+                _gen(lambda s: _usd(_div(s.gpu_system_cost(), s.correct))),
+            ),
+        ]
+        gpu_note = (
+            " *GPU-hour* is for a self-hosted model, which has no token price (the token views "
+            "cost it at $0): the run's `gpu_usd_per_hour` times its wall time from start to "
+            "finish (a run resumed after a pause includes the gap, and it assumes the GPU was "
+            "rented for all of it), plus any other models at plain API cost."
+        )
     return [
         "## Cost",
         "",
@@ -568,7 +615,7 @@ def _costs(heads: list[str], rows: Rows) -> list[str]:
         "generation, query embedding, any reranker and any scope model (counted on every run, "
         "even when its "
         "result came from the cache, so runs compare as deployed systems); the judge is eval "
-        "overhead and is shown on its own.",
+        "overhead and is shown on its own." + gpu_note,
         "",
         _table(heads, rows(*cost_rows)),
         "",

@@ -1,0 +1,34 @@
+# P3 PR 6 smoke: the P2-best pipeline with a different answering model, 5 questions
+# (--only). Not a result: PR 7 runs the full comparison.
+name = "p3-smoke-openai"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[generation]
+backend = "openai-compatible"
+model = "gpt-6.1-sol"
+prompt = "answer@4"
+# key from OPENAI_API_KEY; base_url defaults to https://api.openai.com/v1
+
+[judge]  # stronger than the generator, pinned per run
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5

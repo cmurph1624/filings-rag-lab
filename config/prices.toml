@@ -32,6 +32,21 @@ long_context_threshold = 100_000
 long_input = 0.50
 long_output = 2.50
 
+# OpenAI: developers.openai.com/api/docs/pricing (fetched 2026-11-02), standard tier, prompts up
+# to 272K tokens. Cached input is a discount only; there is no cache-write charge. The API
+# answers with a dated snapshot name, which is priced as this entry (`pricing.price_key`).
+[models."gpt-6.1-sol"]
+input = 2.00
+output = 10.00
+cache_read = 0.10
+
+# Self-hosted open model (Apache-2.0, huggingface.co/Qwen/Qwen3.6-27B, fetched 2026-11-02).
+# There is no token price: the token views cost it at $0 and the report's GPU-hour view
+# (`gpu_usd_per_hour` in the run's [generation] times the run's wall time) is its cost.
+[models."Qwen/Qwen3.6-27B"]
+input = 0.0
+output = 0.0
+
 [embeddings.voyage-finance-2]
 input = 0.12            # first 50M tokens per account are free; we still price at list
 
