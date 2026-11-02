@@ -46,6 +46,11 @@ judge.
    level, McNemar can't flag a 2-point drop. Report its p-value next to the net count, as in
    P1 and P2, but fail on the net threshold.
 
+`frl noise` refuses runs with different config hashes, duplicate run ids, and any run or
+replicate that is only partly judged. Errored rows are left out of the determinism checks
+(none of the three runs had any). The judge backend caches prompt prefixes, not responses, so
+each replicate is a fresh judgment.
+
 Judge replicates are cheap evidence the judge is stable on identical inputs. They don't
 remove the debatable-gold flips, which is why the noisy list exists.
 
@@ -59,7 +64,7 @@ remove the debatable-gold flips, which is why the noisy list exists.
 | run 960 | 86.7% (130/150) |
 | run 980 | 86.7% (130/150) |
 
-Spread: 1 questions. Verdict agreement across all runs: 96.7% (145/150); unstable questions: 5 ({'correct/incorrect': 5}).
+Spread: 1 questions. Verdict agreement across all runs (150 questions judged in every run): 96.7% (145/150); unstable questions: 5 ({'correct/incorrect': 5}).
 
 | b vs a | fixed | broken | net |
 |---|---|---|---|
@@ -75,7 +80,7 @@ Spread: 1 questions. Verdict agreement across all runs: 96.7% (145/150); unstabl
 | judge@1#r2 | 87.3% (131/150) |
 | judge@1#r3 | 87.3% (131/150) |
 
-Verdict agreement: 100.0% (150/150); unstable: 0 ({}).
+Verdict agreement (150 questions judged in every replicate): 100.0% (150/150); unstable: 0 ({}).
 
 ## Determinism
 

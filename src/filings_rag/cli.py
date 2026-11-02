@@ -310,6 +310,10 @@ def noise_cmd(
         except ValueError as e:
             typer.echo(f"cannot compare: {e}", err=True)
             raise typer.Exit(1) from e
+    problems = noise.check_comparable(runs) + noise.check_comparable(reps, replicates=True)
+    if problems:
+        typer.echo("cannot compare:\n  " + "\n  ".join(problems), err=True)
+        raise typer.Exit(1)
     gen = noise.agreement([(f"run {r.run_id}", r.verdicts) for r in runs])
     judge = (
         noise.agreement([(r.judge.split(":")[-1], r.verdicts) for r in reps])

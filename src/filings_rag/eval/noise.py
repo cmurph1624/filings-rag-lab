@@ -25,6 +25,8 @@ class RunVerdicts:
     run_id: int
     judge: str
     verdicts: dict[str, str]  # question id -> verdict
+    config_hash: str = ""
+    answered: int = 0  # questions answered without error
     retrieved: dict[str, list[int]] = field(default_factory=dict)
     facts: dict[str, Any] = field(default_factory=dict)
 
@@ -34,7 +36,7 @@ class RunVerdicts:
 
 
 def load(conn: psycopg.Connection[Any], run_id: int, replicate: int = 1) -> RunVerdicts:
-    row = conn.execute("SELECT config FROM runs WHERE id = %s", (run_id,)).fetchone()
+    row = conn.execute("SELECT config, config_hash FROM runs WHERE id = %s", (run_id,)).fetchone()
     if row is None:
         raise ValueError(f"no run {run_id}")
     key = from_dict(row[0]).judge_key
@@ -48,10 +50,16 @@ def load(conn: psycopg.Connection[Any], run_id: int, replicate: int = 1) -> RunV
             (run_id, judge),
         ).fetchall()
     )
-    rv = RunVerdicts(run_id, judge, verdicts)
+    if not verdicts:
+        raise ValueError(f"run {run_id} has no judgments under {judge}")
+    rv = RunVerdicts(run_id, judge, verdicts, row[1])
+    # Errored rows have no retrieval or route, so they are left out of the determinism checks.
     for qid, retrieved, route in conn.execute(
-        "SELECT question_id, retrieved, route FROM run_questions WHERE run_id = %s", (run_id,)
+        "SELECT question_id, retrieved, route FROM run_questions"
+        " WHERE run_id = %s AND error IS NULL",
+        (run_id,),
     ):
+        rv.answered += 1
         rv.retrieved[qid] = [int(h["chunk_id"]) for h in retrieved or []]
         rv.facts[qid] = (route or {}).get("facts")
     return rv
@@ -85,6 +93,27 @@ def agreement(sources: list[tuple[str, dict[str, str]]]) -> Agreement:
         broken = sum(va[q] == "correct" and vb[q] != "correct" for q in common)
         pairwise.append((na, nb, fixed, broken))
     return Agreement(labels, accuracies, unstable, pairwise, len(common))
+
+
+def check_comparable(runs: list[RunVerdicts], replicates: bool = False) -> list[str]:
+    """Reasons these runs can't be compared as noise: duplicates, different configs, partial
+    judgings. Empty when they can. Judge `replicates` are one run judged several times, so
+    only the partial-judging check applies to them."""
+    problems = []
+    ids = [r.run_id for r in runs]
+    if not replicates and len(set(ids)) < len(ids):
+        problems.append(f"duplicate run ids: {ids}")
+    hashes = {r.config_hash for r in runs}
+    if not replicates and len(hashes) > 1:
+        problems.append(
+            "runs have different configs: " + ", ".join(f"{r.run_id}={r.config_hash}" for r in runs)
+        )
+    for r in runs:
+        if len(r.verdicts) < r.answered:
+            problems.append(
+                f"run {r.run_id} under {r.judge}: {len(r.verdicts)} judged of {r.answered} answered"
+            )
+    return problems
 
 
 def identical_share(
@@ -121,7 +150,8 @@ def render(gen: Agreement, judge: Agreement | None, retrieval: Share, retrieval_
     accs = [c for c, _ in gen.accuracies]
     lines += [
         "",
-        f"Spread: {max(accs) - min(accs)} questions. Verdict agreement across all runs:"
+        f"Spread: {max(accs) - min(accs)} questions. Verdict agreement across all runs"
+        f" ({gen.common} questions judged in every run):"
         f" {pct(gen.common - len(gen.unstable), gen.common)}; unstable questions:"
         f" {len(gen.unstable)} ({dict(flip_kinds(gen.unstable))}).",
         "",
@@ -143,7 +173,8 @@ def render(gen: Agreement, judge: Agreement | None, retrieval: Share, retrieval_
         ]
         lines += [
             "",
-            f"Verdict agreement: {pct(judge.common - len(judge.unstable), judge.common)};"
+            f"Verdict agreement ({judge.common} questions judged in every replicate):"
+            f" {pct(judge.common - len(judge.unstable), judge.common)};"
             f" unstable: {len(judge.unstable)} ({dict(flip_kinds(judge.unstable))}).",
         ]
     same, n, differ = retrieval

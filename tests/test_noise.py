@@ -34,3 +34,23 @@ def test_render_lists_unstable_questions() -> None:
     text = noise.render(gen, None, (1, 1, []), (1, 1, []), (1, 1, []))
     assert "| 00001 | correct / refused | – |" in text
     assert "Spread: 1 questions" in text
+
+
+def _rv(run_id: int, n: int, answered: int, h: str = "h1", judge: str = "j") -> noise.RunVerdicts:
+    return noise.RunVerdicts(run_id, judge, {f"q{i}": "correct" for i in range(n)}, h, answered)
+
+
+def test_check_comparable() -> None:
+    assert noise.check_comparable([_rv(1, 3, 3), _rv(2, 3, 3)]) == []
+    dup = noise.check_comparable([_rv(1, 3, 3), _rv(1, 3, 3)])
+    assert len(dup) == 1 and "duplicate" in dup[0]
+    assert "different configs" in noise.check_comparable([_rv(1, 3, 3), _rv(2, 3, 3, "h2")])[0]
+    partial = noise.check_comparable([_rv(1, 3, 3), _rv(2, 2, 3)])
+    assert partial == ["run 2 under j: 2 judged of 3 answered"]
+
+
+def test_check_comparable_replicates() -> None:
+    reps = [_rv(1, 3, 3, judge="j"), _rv(1, 3, 3, judge="j#r2"), _rv(1, 1, 3, judge="j#r3")]
+    assert noise.check_comparable(reps, replicates=True) == [
+        "run 1 under j#r3: 1 judged of 3 answered"
+    ]
