@@ -43,6 +43,8 @@ reverse; unjudged, unanswered and refused count as not correct.
 - Mixed-route questions are the weak spot for every model (47–59%).
 - Fiscal period stated correctly: 98.7% (Sonnet), 98.0% (Haiku), 98.7% (Opus), 95.2% (Qwen, 139/146 non-refused).
   Qwen gave no period in 4 answers.
+- The Opus row is self-judged: the pinned judge is Opus 5.5, which also generated run 1443. A self-preference bias
+  would favour Opus, so it cannot explain Opus not beating Sonnet, but it is not separated from the result.
 - Faithfulness (`frl faithful`) was run only for 846 (PR 5); it was not run for the other models.
 - Not verified: why the share of answers citing excerpts differs (Sonnet 58.7%, Haiku 88%, Opus 100%, Qwen 81%) under
   the same prompt.
