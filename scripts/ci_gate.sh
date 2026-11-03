@@ -15,6 +15,10 @@ if [[ "${DATABASE_URL:-}" != */frl_ci ]]; then
 fi
 uv sync --locked -q || exit 2
 uv run frl db migrate || exit 2
+# The synthetic question sets are committed files; the gate scores synth-prose@1, so load them
+# and map their evidence chunks to the pipeline's chunks before any check.
+uv run frl bench load-synth || exit 2
+uv run frl ingest label structured@1 || exit 2
 
 # Each list says which source tree it imported, and the script checks it: if the base listing
 # silently imported the PR's own registry, every new pipeline would skip the gate.

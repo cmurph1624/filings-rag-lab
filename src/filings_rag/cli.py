@@ -7,10 +7,11 @@ from typing import Annotated
 
 import psycopg
 import typer
+from psycopg import sql
 
 from filings_rag import cache, corpora, db
 from filings_rag.backends.factory import make_backend
-from filings_rag.benchmark import financebench
+from filings_rag.benchmark import financebench, synth, synth_gen
 from filings_rag.config import get_settings
 from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
@@ -18,12 +19,18 @@ from filings_rag.embed.base import Embedder
 from filings_rag.embed.voyage import VoyageEmbedder
 from filings_rag.eval import faithful, gate, labels, noise, report, routes
 from filings_rag.eval import judge as judging
+from filings_rag.extract.html import EXTRACTOR
 from filings_rag.facts import concepts, coverage, lookup, metrics
 from filings_rag.facts import load as facts_load
 from filings_rag.harness import config as run_config
 from filings_rag.harness import run as harness
 from filings_rag.harness import setup
-from filings_rag.harness.prompts import get_faithful_prompt, get_judge_prompt, get_prompt
+from filings_rag.harness.prompts import (
+    get_faithful_prompt,
+    get_judge_prompt,
+    get_prompt,
+    get_synth_prompt,
+)
 from filings_rag.ingest import build
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import embedding_cost
@@ -64,6 +71,132 @@ def bench_pull() -> None:
     with psycopg.connect(get_settings().database_url) as conn:
         docs, questions = financebench.load(conn, src)
     typer.echo(f"loaded {questions} questions over {docs} documents")
+
+
+def _company_names() -> tuple[dict[int, str], dict[int, list[str]]]:
+    """cik -> display name, cik -> every name a question may use (name, aliases, ticker)."""
+    names: dict[int, str] = {}
+    allnames: dict[int, list[str]] = {}
+    with (CORPUS / "companies.csv").open() as fh:
+        for r in csv.DictReader(fh):
+            cik = int(r["cik"])
+            names[cik] = r["company"]
+            allnames[cik] = [r["company"], *[a for a in r["aliases"].split(";") if a]]
+    return names, allnames
+
+
+@bench_app.command("synth-facts")
+def bench_synth_facts(
+    n: int = typer.Option(300, help="Questions to sample"),
+    per_company: int = typer.Option(12, help="At most this many per company"),
+    per_metric: int = typer.Option(14, help="At most this many per metric"),
+    corpus_ref: str = typer.Option(
+        "fb-distractors@1", "--corpus", help="Where the 10-Ks come from"
+    ),
+) -> None:
+    """Write corpus/synth-facts@1.jsonl: templated metric questions with gold computed from XBRL
+    (metrics@1), then load them. The file is deterministic for a database and seed."""
+    name, version, _ = corpora.parse_ref(corpus_ref)
+    cmap = concepts.load(CONCEPTS)
+    offsets = lookup.read_offsets(CORPUS / "companies.csv")
+    names, _ = _company_names()
+    with psycopg.connect(get_settings().database_url) as conn:
+        cands = synth.fact_candidates(conn, cmap, offsets, names, name, version)
+        chosen = synth.select_facts(cands, n, per_company=per_company, per_metric=per_metric)
+        qs = [synth.fact_question(c) for c in chosen]
+        path = CORPUS / f"{synth.FACTS_SET}.jsonl"
+        synth.write_jsonl(path, qs)
+        synth.load(conn, qs)
+    by_metric = Counter(c.metric for c in chosen)
+    typer.echo(
+        f"{len(cands)} computable (10-K, metric) pairs; wrote {len(qs)} questions over"
+        f" {len({c.company for c in chosen})} companies and {len(by_metric)} metrics to {path}"
+    )
+
+
+@bench_app.command("synth-prose")
+def bench_synth_prose(
+    n: int = typer.Option(150, help="Questions to keep"),
+    candidates: int = typer.Option(230, help="Chunks to sample (some generations are dropped)"),
+    corpus_ref: str = typer.Option("fb-gate@1", "--corpus", help="Corpus of 10-Ks"),
+    model: str = typer.Option("claude-haiku-5-5", help="Writer model (claude-cli, governed)"),
+) -> None:
+    """Write corpus/synth-prose@1.jsonl: a question from each sampled 10-K chunk, the chunk as
+    its evidence. Resumable (replies are kept in data/synth/); exit 3 on a usage pause."""
+    name, version, _ = corpora.parse_ref(corpus_ref)
+    offsets = lookup.read_offsets(CORPUS / "companies.csv")
+    _, allnames = _company_names()
+    raw_path = DATA / "synth" / f"{synth.PROSE_SET}.raw.jsonl"
+    with psycopg.connect(get_settings().database_url) as conn:
+        table = harness.pipeline_index(conn, "structured@1")[0]
+        rows = conn.execute(
+            sql.SQL(
+                "SELECT c.id, c.ord, d.doc_name, d.cik, d.company, c.page, c.section, c.text"
+                " FROM {t} c JOIN documents d ON d.id = c.document_id"
+                " JOIN corpus_documents cd ON cd.accession = d.accession"
+                " AND cd.corpus = %s AND cd.version = %s"
+                " WHERE d.form_type = '10-K' AND d.extractor = %s"
+                " ORDER BY d.doc_name, c.ord"
+            ).format(t=sql.Identifier(table)),
+            (name, version, EXTRACTOR),
+        ).fetchall()
+        benchmark = {r[0] for r in conn.execute("SELECT doc_name FROM benchmark_docs")}
+        conn.commit()
+    cands = synth.prose_candidates(rows, offsets, benchmark, candidates)
+    typer.echo(f"{len(cands)} sampled chunks of {len(rows)}; replies kept in {raw_path}")
+    stats = synth_gen.generate(
+        cands,
+        raw_path,
+        make_backend({"backend": "claude-cli", "model": model}),
+        get_synth_prompt(synth.PROSE_SET),
+        log=typer.echo,
+    )
+    typer.echo(
+        f"{stats.judged} written, {stats.failed} failed, {stats.skipped} already had a reply;"
+        f" cost ${stats.cost:.4f} (API-equivalent)"
+    )
+    raw = synth_gen.read_raw(raw_path)
+    kept: list[synth.SynthQuestion] = []
+    dropped: Counter[str] = Counter()
+    seen: set[str] = set()
+    cik_of = {r[2]: r[3] for r in rows}
+    for c in cands:
+        rec = raw.get(c.chunk_id)
+        if rec is None:
+            continue
+        ok, why = synth.check_prose(str(rec["reply"]), c, allnames.get(cik_of[c.doc_name], []))
+        if ok is None:
+            dropped[why] += 1
+        elif ok[0].lower() in seen:
+            dropped["duplicate question"] += 1
+        elif len(kept) < n:
+            seen.add(ok[0].lower())
+            kept.append(synth.prose_question(c, *ok))
+    typer.echo(f"kept {len(kept)} of {sum(c.chunk_id in raw for c in cands)} generations")
+    for why, k in dropped.most_common():
+        typer.echo(f"  dropped {k}: {why}")
+    if stats.paused:
+        typer.echo(f"paused: {stats.paused}; run again to resume")
+        raise typer.Exit(3)
+    if len(kept) < n:
+        typer.echo(f"only {len(kept)} of the {n} wanted; raise --candidates", err=True)
+        raise typer.Exit(1)
+    path = CORPUS / f"{synth.PROSE_SET}.jsonl"
+    synth.write_jsonl(path, kept)
+    with psycopg.connect(get_settings().database_url) as conn:
+        synth.load(conn, kept)
+    typer.echo(f"wrote {len(kept)} questions to {path}")
+
+
+@bench_app.command("load-synth")
+def bench_load_synth() -> None:
+    """Load the committed synthetic question files (corpus/synth-*.jsonl) into the database;
+    safe to repeat. CI runs it before the gate."""
+    with psycopg.connect(get_settings().database_url) as conn:
+        for ref in (synth.FACTS_SET, synth.PROSE_SET):
+            path = CORPUS / f"{ref}.jsonl"
+            if path.exists():
+                typer.echo(f"{ref}: loaded {synth.load(conn, synth.read_jsonl(path))} questions")
 
 
 @corpus_app.command("audit")

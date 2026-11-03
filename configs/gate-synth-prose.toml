@@ -1,0 +1,21 @@
+# Retrieval gate (P3 PR 8): the P2 best retrieval (structured@1 + rules scope + rerank-3) on the
+# synth-prose@1 questions, retrieval-only, on the gate corpus. Each question's evidence is the
+# chunk it was written from. No router: the questions are prose.
+name = "gate-synth-prose"
+pipeline = "structured@1"
+questions = "synth-prose@1"
+corpus = "fb-gate@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5

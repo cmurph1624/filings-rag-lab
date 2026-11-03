@@ -21,3 +21,9 @@ baseline = 1079  # structured@1, 2026-11-01: recall@10 0.833, hit@10 0.886, MRR 
 [[check]]  # plain vector top-10: no scope or reranker to hide a chunking regression
 config = "configs/gate-vector.toml"
 baseline = 1080  # structured@1, 2026-11-01: recall@10 0.521, hit@10 0.557, MRR 0.282
+
+[[check]]  # P3 PR 8: the same retrieval on synth-prose@1 (150 questions written from 10-K chunks,
+# each question's evidence is its source chunk). Near the ceiling by construction (see
+# docs/results/p3-synth.md), so it catches a chunker that breaks prose, not an improvement.
+config = "configs/gate-synth-prose.toml"
+baseline = 1525  # structured@1, 2026-11-02: recall@10 1.000, hit@10 1.000, MRR 0.952

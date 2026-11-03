@@ -80,3 +80,15 @@ didn't move: it reads XBRL, not chunks. #31 was closed unmerged, and its build d
 The plan estimated 3–4M tokens for a gate rebuild. Small windows make many more chunks, so a
 chunker change costs up to about $2 the first time. Later pushes to the same PR re-embed only
 chunk text that changed.
+
+## Update (P3 PR 8): a third gate check on synthetic prose questions
+
+`config/gate.toml` gained `gate-synth-prose` (baseline run 1525): the P2 best retrieval on the 150
+`synth-prose@1` questions, retrieval-only, on the same gate corpus. It is a separate question
+set and the verdict says so; it is never mixed into the open-subset checks. `scripts/ci_gate.sh`
+now runs `frl bench load-synth` and `frl ingest label structured@1` before gating, because the
+questions are committed files (`corpus/synth-*.jsonl`) and their evidence labels are per
+pipeline. Run 1525 was copied into `frl_ci` by hand with its rows from `runs` and
+`run_questions`; a refresh from `frl` after this date already contains it. The set is close to
+its ceiling (recall@10 1.000), so it catches a chunker that breaks prose but cannot show an
+improvement: see `p3-synth.md`.
