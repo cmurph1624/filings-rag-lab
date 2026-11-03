@@ -355,6 +355,22 @@ def _gen(fn: Any) -> Any:
     return lambda s: fn(s) if s.generated else "–"
 
 
+def _versus_rows(runs: list[RunSummary]) -> list[tuple[str, Any]]:
+    """Fixed / broken against the first run, with McNemar's test, when comparing runs."""
+    if len(runs) < 2 or not all(s.generated for s in runs):
+        return []
+    base = runs[0]
+
+    def cell(s: RunSummary, fn: Any) -> str:
+        return "–" if s is base else str(fn(*fixed_broken(s, base)))
+
+    return [
+        (f"fixed vs run {base.run_id}", lambda s: cell(s, lambda f, b: f)),
+        (f"broken vs run {base.run_id}", lambda s: cell(s, lambda f, b: b)),
+        ("McNemar p (exact, two-sided)", lambda s: cell(s, lambda f, b: f"{mcnemar_p(f, b):.3f}")),
+    ]
+
+
 def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     out = [
         "## Answers",
@@ -368,6 +384,7 @@ def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
                 ("incorrect", _gen(lambda s: str(s.verdicts["incorrect"]))),
                 ("refused", _gen(lambda s: str(s.verdicts["refused"]))),
                 ("not judged", _gen(lambda s: str(s.total - sum(s.verdicts.values())))),
+                *_versus_rows(runs),
                 ("answers citing excerpts", _gen(lambda s: _pct(s.citing, s.answered))),
                 (
                     "citation precision",
@@ -395,6 +412,25 @@ def _answers(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     )
     out.append("")
     return out
+
+
+def fixed_broken(s: RunSummary, base: RunSummary) -> tuple[int, int]:
+    """Questions `s` gets right that `base` doesn't (fixed), and the reverse (broken). A
+    question that is unanswered, unjudged or refused is not correct, as in headline accuracy."""
+    qids = set(s.verdict_of) | set(base.verdict_of)
+    fixed = sum(s.verdict_of.get(q) == "correct" != base.verdict_of.get(q) for q in qids)
+    broken = sum(base.verdict_of.get(q) == "correct" != s.verdict_of.get(q) for q in qids)
+    return fixed, broken
+
+
+def mcnemar_p(fixed: int, broken: int) -> float:
+    """Exact two-sided McNemar p-value: how often a fair coin splits the questions the two runs
+    disagree on at least as unevenly as this."""
+    n = fixed + broken
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, k) for k in range(min(fixed, broken) + 1)) / 2**n
+    return float(min(1.0, 2 * tail))
 
 
 def subset_accuracy(s: RunSummary, qids: list[str]) -> str:

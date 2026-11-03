@@ -1,0 +1,34 @@
+# P3 PR 7: run 846's config (p2-04-router-rules-facts) with only the answering model changed
+# (Claude Opus 5.5). Same retrieval, router, prompt (answer@4) and pinned judge, so the runs differ by
+# generator alone. Results: docs/results/p3-models.md.
+name = "p3-models-opus"
+pipeline = "structured@1"
+questions = "financebench-open"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[generation]
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "answer@4"
+
+[judge]  # pinned per run; for this config the judge is the same model as the generator (self-judged)
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5
