@@ -227,3 +227,51 @@ def get_faithful_prompt(ref: str) -> FaithfulPrompt:
     if ref not in FAITHFUL_PROMPTS:
         raise ValueError(f"unknown faithfulness prompt {ref!r}; known: {sorted(FAITHFUL_PROMPTS)}")
     return FAITHFUL_PROMPTS[ref]
+
+
+@dataclass(frozen=True)
+class SynthPrompt:
+    """Writes one retrieval question from a filing excerpt (`frl bench synth-prose`)."""
+
+    system: str
+    template: str  # {company}, {form}, {year}, {section}, {excerpt}
+
+    def render(self, company: str, form: str, year: int, section: str, excerpt: str) -> str:
+        return self.template.format(
+            company=company, form=form, year=year, section=section, excerpt=excerpt
+        )
+
+
+SYNTH_V1 = SynthPrompt(
+    system=(
+        "You write test questions for a system that searches companies' SEC filings. Given "
+        "one excerpt from a filing, write a single question that a financial analyst could "
+        "ask without having seen the excerpt, and whose answer is stated in the excerpt. "
+        "Requirements:\n"
+        "- Name the company and the fiscal year in the form FY2021 (use exactly the year "
+        "you are given, and no other year).\n"
+        "- Stand alone: never refer to an excerpt, passage, text, section or document.\n"
+        "- Ask about the substance (what, why, how, which, how much), not the wording. Do not "
+        "copy phrases from the excerpt.\n"
+        "- Prefer a question that this excerpt answers better than the rest of the filing "
+        "would; avoid generic questions that any 10-K could answer.\n"
+        "- Write the answer in one to three sentences, using only the excerpt.\n"
+        "If the excerpt has no substantive content to ask about (boilerplate, a list of "
+        'names, a table of numbers), reply {"skip": "<reason>"}. Otherwise reply with only a '
+        'JSON object: {"question": "<question>", "answer": "<answer>"}'
+    ),
+    template=(
+        "Company: {company}\nFiling: {form}, fiscal year FY{year}\nSection: {section}\n\n"
+        "Excerpt:\n{excerpt}"
+    ),
+)
+
+SYNTH_PROMPTS: dict[str, SynthPrompt] = {"synth-prose@1": SYNTH_V1}
+
+
+def get_synth_prompt(ref: str) -> SynthPrompt:
+    if ref not in SYNTH_PROMPTS:
+        raise ValueError(
+            f"unknown synthetic-question prompt {ref!r}; known: {sorted(SYNTH_PROMPTS)}"
+        )
+    return SYNTH_PROMPTS[ref]

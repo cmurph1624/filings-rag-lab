@@ -64,6 +64,7 @@ class Measured:
     retrieval: dict[str, rmetrics.QuestionRetrieval]
     facts: dict[str, bool] | None  # question id -> judge-free fact check ok; None: no router
     context_words: float = 0.0  # mean words retrieved per question
+    questions: str = "financebench-open"  # the question set the run used
 
 
 def measure(conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteLabel]) -> Measured:
@@ -93,7 +94,9 @@ def measure(conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteL
         (run_id,),
     ).fetchone()
     context = float(words[0]) if words and words[0] is not None else 0.0
-    return Measured(run_id, cfg.pipeline, {q.question_id: q for q in scored}, facts, context)
+    return Measured(
+        run_id, cfg.pipeline, {q.question_id: q for q in scored}, facts, context, cfg.questions
+    )
 
 
 @dataclass(frozen=True)
@@ -180,6 +183,16 @@ def _labelled(base: rmetrics.QuestionRetrieval, cand: rmetrics.QuestionRetrieval
     return min(len(base.found_at), len(cand.found_at))
 
 
+def _short(question_id: str) -> str:
+    return question_id.removeprefix("financebench_id_")
+
+
+def _set_line(questions: str) -> str:
+    if questions == "financebench-open":
+        return "FinanceBench open subset (150 questions)."
+    return f"Synthetic set `{questions}` (`frl bench`), kept apart from the open subset."
+
+
 def _fmt(metric: str, v: float) -> str:
     return f"{v:.0f}" if metric == "fact_correct" else f"{v:.3f}"
 
@@ -189,13 +202,15 @@ def render(results: list[CheckResult], corpus: str) -> str:
     lines = [
         f"## Retrieval gate: {'PASS' if ok else 'FAIL'}",
         "",
-        f"FinanceBench open subset (150 questions), retrieval-only, corpus `{corpus}`."
+        f"Retrieval-only, corpus `{corpus}`."
         " Thresholds are in `config/gate.toml`, from docs/results/p3-noise.md.",
     ]
     for r in results:
         lines += [
             "",
             f"### {r.name}: {'pass' if r.ok else 'FAIL'}",
+            "",
+            _set_line(r.baseline.questions),
             "",
             f"Baseline run {r.baseline.run_id} (`{r.baseline.pipeline}`), candidate run"
             f" {r.candidate.run_id} (`{r.candidate.pipeline}`), over the baseline's"
@@ -234,15 +249,16 @@ def render(results: list[CheckResult], corpus: str) -> str:
             lines += [
                 "",
                 f"{len(r.unscored)} questions have no labelled evidence in the candidate's"
-                " pipeline (counted as not found): " + ", ".join(q[16:] for q in r.unscored[:30]),
+                " pipeline (counted as not found): "
+                + ", ".join(_short(q) for q in r.unscored[:30]),
             ]
         if r.lost:
             lines += [
                 "",
                 f"Lost evidence from the top 10 ({len(r.lost)}):"
                 " question (baseline rank → candidate rank, – = not in the top 10): "
-                + ", ".join(f"{q[16:]} ({x} → {y or '–'})" for q, x, y in r.lost[:30]),
+                + ", ".join(f"{_short(q)} ({x} → {y or '–'})" for q, x, y in r.lost[:30]),
             ]
         if r.facts_lost:
-            lines += ["", "Fact checks lost: " + ", ".join(q[16:] for q in r.facts_lost)]
+            lines += ["", "Fact checks lost: " + ", ".join(_short(q) for q in r.facts_lost)]
     return "\n".join(lines) + "\n"

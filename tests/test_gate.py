@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -95,3 +96,17 @@ def test_passages_align_by_evidence_index_not_position() -> None:
     r = gate.compare("c", base, cand, ALLOWED)
     assert r.passages_lost == 0
     assert next(x for x in r.rows if x.metric == "recall_at_10").candidate < 1.0
+
+
+def test_render_names_the_question_set() -> None:
+    r = gate.compare("c", _m(BASE), _m(BASE), ALLOWED)
+    assert "FinanceBench open subset (150 questions)." in gate.render([r], "g")
+    synth = gate.compare("s", replace(_m(BASE), questions="synth-prose@1"), _m(BASE), ALLOWED)
+    text = gate.render([synth], "g")
+    assert "Synthetic set `synth-prose@1`" in text
+    assert "open subset (150" not in text
+
+
+def test_short_ids() -> None:
+    assert gate._short("financebench_id_00005") == "00005"
+    assert gate._short("synthprose1/3M_2018_10K/12") == "synthprose1/3M_2018_10K/12"

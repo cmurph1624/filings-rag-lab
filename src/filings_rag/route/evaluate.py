@@ -121,16 +121,17 @@ def headline(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
 def fact_route_accuracy(
     conn: psycopg.Connection[Any], run_id: int, labels: dict[str, RouteLabel]
 ) -> list[FactCheck]:
-    """For questions labelled `fact` whose gold answer is a bare number: does the headline
-    computed fact equal it?"""
+    """For questions labelled `fact` (and every `synth-facts` question, fact-route by
+    construction) whose gold answer is a bare number: does the headline computed fact equal it?"""
     rows = conn.execute(
-        "SELECT r.question_id, q.answer, r.route FROM run_questions r"
-        " JOIN questions q ON q.id = r.question_id WHERE r.run_id = %s ORDER BY 1",
+        "SELECT r.question_id, q.answer, r.route, q.benchmark LIKE 'synth-facts@%%'"
+        " FROM run_questions r JOIN questions q ON q.id = r.question_id"
+        " WHERE r.run_id = %s ORDER BY 1",
         (run_id,),
     ).fetchall()
     out = []
-    for qid, answer, route in rows:
-        if labels.get(qid) is None or labels[qid].route != "fact":
+    for qid, answer, route, synthetic in rows:
+        if not synthetic and (labels.get(qid) is None or labels[qid].route != "fact"):
             continue
         gold = gold_number(answer)
         if gold is None:

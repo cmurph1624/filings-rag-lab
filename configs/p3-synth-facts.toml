@@ -1,0 +1,24 @@
+# P3 PR 8: run 846's retrieval and rules router on the synth-facts@1 questions, retrieval-only.
+# The fact route is scored judge-free (the headline computed fact against the gold number), so
+# no generator or judge is needed. Not the open subset: `frl report` says so.
+name = "p3-synth-facts"
+pipeline = "structured@1"
+questions = "synth-facts@1"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5

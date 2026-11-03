@@ -17,6 +17,7 @@ from filings_rag.harness.prompts import citations
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, batch_api_cost, load_prices, plain_api_cost, rerank_cost
 from filings_rag.retrieve.factory import resolve_spec
+from filings_rag.route import evaluate as route_eval
 
 KS = (1, 3, 5, 10)
 COMPANIES = Path(__file__).resolve().parents[3] / "corpus" / "companies.csv"
@@ -37,6 +38,9 @@ class RunSummary:
     generation: str  # "–" for a retrieval-only run
     judge: str
     total: int  # questions in the set
+    questions: str = "financebench-open"  # the question set
+    facts_ok: int = 0  # judge-free fact checks passed ...
+    facts_n: int = 0  # ... of those made (a run with a router)
     generated: bool = True
     answered: int = 0
     errors: int = 0
@@ -160,6 +164,7 @@ def summarize(
         judge=cfg.judge_key or "–",
         generated=generated,
         total=int(total_row[0]) if total_row else 0,
+        questions=cfg.questions,
     )
     if g and g.get("gpu_usd_per_hour") is not None:
         s.gpu_rate = float(g["gpu_usd_per_hour"])
@@ -249,6 +254,9 @@ def summarize(
                 if s.verdict_of.get(qid) != "refused":  # a refusal has no claims to check
                     s.faith[qid] = (n[0], n[1], n[2])
     s.retrieval, s.unlabelled = rmetrics.load(conn, run_id, cfg.pipeline)
+    if cfg.router is not None:
+        checks = route_eval.fact_route_accuracy(conn, run_id, routes or {})
+        s.facts_n, s.facts_ok = len(checks), sum(c.ok for c in checks)
     conn.commit()
     return s
 
@@ -304,8 +312,7 @@ def render(
     out = [
         f"# Run report: {title}",
         "",
-        f"FinanceBench **open subset** ({runs[0].total} questions). These are not full-set "
-        "FinanceBench results.",
+        _scope_line(runs[0]),
         "",
         _table(
             heads,
@@ -524,12 +531,29 @@ def _generation(heads: list[str], rows: Rows) -> list[str]:
     ]
 
 
+def _scope_line(s: RunSummary) -> str:
+    if s.questions == "financebench-open":
+        return (
+            f"FinanceBench **open subset** ({s.total} questions). These are not full-set "
+            "FinanceBench results."
+        )
+    return (
+        f"Synthetic question set **{s.questions}** ({s.total} questions, `frl bench`). Not "
+        "FinanceBench: these numbers are not comparable with the open subset's."
+    )
+
+
+def _facts_cell(s: RunSummary) -> str:
+    return f"{s.facts_ok}/{s.facts_n}" if s.facts_n else "–"
+
+
 def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str]:
     return [
         "## Retrieval",
         "",
-        "Against FinanceBench evidence passages mapped to the pipeline's chunks. recall@k: share "
-        "of a question's evidence passages found in the top k. hit@k: any passage found. These "
+        "Against labelled evidence passages (FinanceBench's, or a synthetic question's source "
+        "chunk) mapped to the pipeline's chunks. recall@k: share of a question's evidence "
+        "passages found in the top k. hit@k: any passage found. These "
         "are a proxy: an answer can also come from a passage that repeats the same figure, and "
         "a partial overlap can count as a hit (see docs/results/p0-label-audit.md).",
         "",
@@ -545,6 +569,11 @@ def _retrieval(runs: list[RunSummary], heads: list[str], rows: Rows) -> list[str
                 (
                     "questions scored",
                     lambda s: f"{len(s.retrieval)} ({s.unlabelled} without labels)",
+                ),
+                *(
+                    [("fact route: headline equals gold", _facts_cell)]
+                    if any(s.facts_n for s in runs)
+                    else []
                 ),
                 (
                     "rerank cost (list)",
