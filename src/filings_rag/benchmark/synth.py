@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from filings_rag.edgar.resolve import parse_doc_name
@@ -122,6 +123,33 @@ def load(conn: psycopg.Connection[Any], questions: list[SynthQuestion]) -> int:
     if own:
         raise ValueError(f"ids belong to the open subset: {sorted(own)[:5]}")
     with conn.transaction():
+        for ref in {q.benchmark for q in questions}:
+            keep = [q.id for q in questions if q.benchmark == ref]
+            stale = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM questions WHERE benchmark = %s AND NOT id = ANY(%s)",
+                    (ref, keep),
+                )
+            ]
+            if stale:
+                used = conn.execute(
+                    "SELECT count(DISTINCT run_id) FROM run_questions WHERE question_id = ANY(%s)",
+                    (stale,),
+                ).fetchone()
+                if used and used[0]:
+                    raise ValueError(
+                        f"{len(stale)} {ref} questions are no longer in the file but {used[0]}"
+                        " runs used them: delete those runs first"
+                    )
+                for table in ("evidence_labels", "query_scopes", "query_routes"):  # derived rows
+                    conn.execute(
+                        sql.SQL("DELETE FROM {} WHERE question_id = ANY(%s)").format(
+                            sql.Identifier(table)
+                        ),
+                        (stale,),
+                    )
+                conn.execute("DELETE FROM questions WHERE id = ANY(%s)", (stale,))
         for q in questions:
             conn.execute(
                 """INSERT INTO questions
@@ -231,21 +259,32 @@ def fact_candidates(
 def select_facts(
     cands: list[FactCandidate], n: int, *, per_company: int, per_metric: int, seed: int = SEED
 ) -> list[FactCandidate]:
-    """A seeded sample of about n candidates with no company or metric dominating."""
+    """A seeded sample of about n candidates, taken one company at a time in turn so every
+    company is covered, with no company or metric over its cap."""
     rng = random.Random(seed)
-    pool = sorted(cands, key=lambda c: (c.doc_name, c.metric))
-    rng.shuffle(pool)
-    by_company: Counter[str] = Counter()
+    by_company: dict[str, list[FactCandidate]] = {}
+    for c in sorted(cands, key=lambda c: (c.doc_name, c.metric)):
+        by_company.setdefault(c.company, []).append(c)
+    queues = {k: rng.sample(v, len(v)) for k, v in sorted(by_company.items())}
+    taken: Counter[str] = Counter()
     by_metric: Counter[str] = Counter()
     chosen: list[FactCandidate] = []
-    for c in pool:
-        if len(chosen) >= n:
-            break
-        if by_company[c.company] >= per_company or by_metric[c.metric] >= per_metric:
-            continue
-        by_company[c.company] += 1
-        by_metric[c.metric] += 1
-        chosen.append(c)
+    while len(chosen) < n and any(queues.values()):
+        for company in list(queues):
+            if len(chosen) >= n:
+                break
+            queue = queues[company]
+            if taken[company] >= per_company:
+                queue.clear()
+                continue
+            for i, c in enumerate(queue):
+                if by_metric[c.metric] < per_metric:
+                    chosen.append(queue.pop(i))
+                    taken[company] += 1
+                    by_metric[c.metric] += 1
+                    break
+            else:
+                queue.clear()
     return sorted(chosen, key=lambda c: (c.doc_name, c.metric))
 
 

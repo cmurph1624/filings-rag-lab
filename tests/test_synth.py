@@ -70,6 +70,12 @@ def test_select_facts_is_seeded_and_capped() -> None:
     assert a == sorted(a, key=lambda c: (c.doc_name, c.metric))
 
 
+def test_select_facts_covers_every_company_before_repeating_one() -> None:
+    pool = [cand(i, c, "roa") for i in range(9) for c in "ABCDEFGH"]
+    a = synth.select_facts(pool, 8, per_company=5, per_metric=99)
+    assert sorted(c.company for c in a) == list("ABCDEFGH")
+
+
 def test_fact_question_carries_gold_and_formula() -> None:
     c = synth.FactCandidate(
         "3M", "3M_2018_10K", 2018, "roa", "pct", 0.1512, "net_income 5 / assets 33"
