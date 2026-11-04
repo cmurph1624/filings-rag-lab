@@ -489,3 +489,29 @@ def test_serve_config_sets_the_guardrails() -> None:
     lim = Limits.from_config(cfg.serve)
     assert (lim.rate_per_ip_hour, lim.daily_cap_usd, lim.reserve_usd) == (10, 3.0, 0.06)
     assert lim.max_concurrency == 3
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_parallel_requests_from_one_client_cannot_overshoot_the_rate_limit(
+    conn: psycopg.Connection[Any],
+) -> None:
+    lim = Limits(rate_per_ip_hour=3)
+    barrier = threading.Barrier(6)
+    outcomes: list[str] = []
+
+    def go() -> None:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+            barrier.wait()
+            try:
+                lim.check_rate(c, CLIENT)
+                outcomes.append("ok")
+            except Refused as e:
+                outcomes.append(e.kind)
+
+    threads = [threading.Thread(target=go) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["ok"] * 3 + ["rate_limited"] * 3

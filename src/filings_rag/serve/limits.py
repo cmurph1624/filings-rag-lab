@@ -75,6 +75,9 @@ class Limits:
         """Count this request against the client's hour, or raise `Refused` (429). Commits."""
         if client is None:
             return
+        # Serialize one client's requests so parallel ones can't all read a count under the
+        # limit; released at the commit below.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"frl_rate:{client}",))
         conn.execute("DELETE FROM rate_events WHERE at < now() - interval '1 day'")
         n, oldest, now = conn.execute(
             "SELECT count(*), min(at), now() FROM rate_events"
