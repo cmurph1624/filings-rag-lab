@@ -7,9 +7,8 @@ Retrieval is the focus: metadata-scoped vector retrieval in Postgres + pgvector 
 experiment harness records every run (pipeline, retriever, model, judge) with tokens and
 API-equivalent cost. CI runs lint, type checks and tests on every PR.
 
-Not finished yet: a router that answers fact questions from XBRL data with SQL (P2, in progress),
-a CI eval gate that blocks regressions (P3), and a public deployment on AWS (Terraform-provisioned
-EC2, P4). Everything runs locally for now.
+Not finished yet: a public deployment on AWS (Terraform-provisioned EC2, P4). Everything runs
+locally for now.
 
 ## Status
 
@@ -25,15 +24,20 @@ to 60.7%. Rules-based company/period scoping plus a Voyage reranker lifts it to 
 subset, at $0.025 per correct answer at plain API rates ($0.013 Batch). Hybrid BM25 didn't help.
 See [`docs/results/p1-retrieval.md`](docs/results/p1-retrieval.md).
 
-**P2 in progress: routing.** XBRL company facts are loaded into Postgres with a metrics library on
-top ([`docs/results/p2-xbrl-facts.md`](docs/results/p2-xbrl-facts.md)); the router that sends fact
-questions to SQL is not merged yet.
-
 **P2 done: routing.** XBRL facts (SEC `companyfacts`) and a metrics library answer fact
 questions deterministically. A router sends them to SQL-computed facts and keeps prose on
 retrieval. That lifts the open subset to **87.3% (131/150)**: fact questions 98.4%, refusals
 10 → 1, at $0.024 per correct answer (plain API). Decomposing multi-period questions helped
 retrieval but not accuracy. See [`docs/results/p2-routing.md`](docs/results/p2-routing.md).
+
+**P3 done: evals as infrastructure.** No new best accuracy (the headline is still 87.3%); P3 makes
+changes measurable. Re-running the best config moves accuracy by about one question, so the gate
+checks retrieval instead, which caches make exact. A self-hosted CI job runs `frl gate` on every
+retrieval PR, and it blocked a deliberately bad chunker (recall@10 0.833 → 0.584). Swapping the
+answering model changes accuracy by at most 7 questions (Sonnet 87.3%, Haiku 84.0%, Opus 84.0%,
+a 4-bit Qwen3.6-27B 82.7%; no OpenAI row). Fiscal-period and faithfulness metrics, and two
+synthetic question sets kept apart from the headline, are also in. See
+[`docs/results/p3-evals.md`](docs/results/p3-evals.md).
 
 ## Reproduce
 
