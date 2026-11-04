@@ -10,7 +10,6 @@ attempt: a retried question reuses its cached scope, so its cost is counted once
 """
 
 import subprocess
-import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -22,18 +21,13 @@ from psycopg.types.json import Jsonb
 
 from filings_rag.backends.base import ModelBackend, Result
 from filings_rag.backends.governor import UsagePaused
-from filings_rag.facts import concepts
-from filings_rag.facts.lookup import FactLookup, read_offsets
+from filings_rag.harness.answer import AnswerContext, FactRoute, StageError, prepare
 from filings_rag.harness.config import RunConfig
 from filings_rag.harness.prompts import Prompt
 from filings_rag.ingest.registry import get_pipeline
 from filings_rag.pricing import Usage, embedding_cost, model_cost
 from filings_rag.retrieve.base import Retrieval, RetrievalError, Retriever
-from filings_rag.retrieve.decompose import merge as merge_retrievals
-from filings_rag.retrieve.factory import resolve_spec
 from filings_rag.retrieve.scope import Scope, Scoper
-from filings_rag.route import facts as route_facts
-from filings_rag.route.plan import RoutePlan
 from filings_rag.route.router import Router
 
 Log = Callable[[str], None]
@@ -171,48 +165,6 @@ def pending_questions(
     return todo, len(rows) - len(todo)
 
 
-class FactRoute:
-    """Computes the facts for a fact or mixed plan, anchored on the scope's filing. Lookups are
-    cached per anchor for the run."""
-
-    def __init__(
-        self,
-        conn: psycopg.Connection[Any],
-        cmap_path: Path | None = None,
-        companies_csv: Path | None = None,
-    ) -> None:
-        root = Path(__file__).resolve().parents[3]
-        self._conn = conn
-        self._cmap = concepts.load(cmap_path or root / "config" / "concepts.toml")
-        self._offsets = read_offsets(companies_csv or root / "corpus" / "companies.csv")
-        self._lookups: dict[str, FactLookup] = {}
-
-    def run(self, plan: RoutePlan, scope: Scope | None) -> tuple[dict[str, Any], str]:
-        """(route record, Facts section for the prompt). Never raises: any failure is recorded
-        as `facts_error` and the question is answered without facts, from the excerpts."""
-        anchor = None
-        try:
-            results: list[route_facts.FactResult] = []
-            if (
-                plan.route != "prose"
-                and scope is not None
-                and scope.record.get("level") != "corpus"
-            ):
-                anchor = route_facts.choose_anchor(scope.record.get("docs", []), plan)
-            if anchor is not None:
-                if anchor not in self._lookups:
-                    self._lookups[anchor] = FactLookup(
-                        self._conn, self._cmap, anchor, self._offsets
-                    )
-                results = route_facts.compute_plan(self._lookups[anchor], plan)
-            text = route_facts.render_block(anchor, results) if anchor else ""
-            return route_facts.record(plan, anchor, results), text
-        except Exception as e:
-            self._conn.rollback()
-            rec = route_facts.record(plan, anchor, [])
-            return rec | {"facts_error": f"{type(e).__name__}: {e}"[:300]}, ""
-
-
 def document_periods(conn: psycopg.Connection[Any]) -> dict[str, str]:
     """doc_name -> the period a 10-K or 10-Q covers, for prompts that show it. 8-Ks (earnings
     releases and events) are left out: their stored period end is the report date."""
@@ -242,10 +194,9 @@ def execute(
     only: set[str] | None = None,
     log: Log = print,
 ) -> RunStats:
-    fact_route = facts or (FactRoute(conn) if router is not None else None)
-    resolved_retriever = resolve_spec(cfg.retriever)
-    decompose, k = bool(resolved_retriever.get("decompose")), int(resolved_retriever["k"])
-    decompose_merge = str(resolved_retriever.get("decompose_merge", "round-robin"))
+    ctx = AnswerContext.build(
+        conn, cfg.retriever, retriever, scoper=scoper, router=router, facts=facts
+    )
     todo, skipped = pending_questions(conn, run_id, cfg.questions, limit)
     if only is not None:
         todo = [(q, t) for q, t in todo if q in only]
@@ -359,60 +310,29 @@ def execute(
                 stats.stopped_early = True
                 log(f"stopping: {streak} failures in a row (resume with --resume {run_id})")
                 break
-            start = time.monotonic()
-            scope: Scope | None = None
-            if scoper is not None:
-                try:
-                    scope = scoper.scope(qid, question)
-                except UsagePaused as e:  # nothing recorded; resume scopes it again
-                    stats.paused = str(e)
-                    break
-                except Exception as e:
-                    conn.rollback()
-                    record(None, qid, None, f"scope: {type(e).__name__}: {e}")
-                    continue
-            route: dict[str, Any] | None = None
-            route_aux: dict[str, Any] | None = None
-            facts_text = ""
-            if router is not None:
-                try:
-                    plan, route_aux = router.route(qid, question)
-                except UsagePaused as e:
-                    stats.paused = str(e)
-                    break
-                except Exception as e:
-                    conn.rollback()
-                    record(None, qid, None, f"route: {type(e).__name__}: {e}")
-                    continue
-                assert fact_route is not None
-                route, facts_text = fact_route.run(plan, scope)
             try:
-                if decompose and scope is not None and len(scope.groups) > 1:
-                    scope.record["decomposed"] = len(scope.groups)
-                    retrieval = merge_retrievals(
-                        [retriever.retrieve(question, g) for g in scope.groups],
-                        k,
-                        decompose_merge,
-                    )
-                else:
-                    retrieval = retriever.retrieve(question, scope.documents if scope else None)
-            except Exception as e:
+                prep = prepare(ctx, qid, question)
+            except UsagePaused as e:  # nothing recorded; resume scopes and routes it again
+                stats.paused = str(e)
+                break
+            except StageError as e:
                 conn.rollback()
-                # Keep the scope (and any scope-model spend) on the failed row.
-                spent = _Job(qid, Retrieval([], 0, ""), 0.0, scope) if scope else None
-                if isinstance(e, RetrievalError):  # the query was embedded before the failure
-                    spent = _Job(qid, Retrieval([], e.embed_tokens, e.embedder), 0.0, scope)
-                record(spent, qid, None, f"retrieval: {type(e).__name__}: {e}")
+                spent: _Job | None = None
+                if e.stage == "retrieval":
+                    # Keep the scope (and any scope-model spend) on the failed row, and the
+                    # query embedding when it happened before the failure.
+                    if isinstance(e.cause, RetrievalError):
+                        failed = Retrieval([], e.cause.embed_tokens, e.cause.embedder)
+                        spent = _Job(qid, failed, 0.0, e.scope)
+                    elif e.scope is not None:
+                        spent = _Job(qid, Retrieval([], 0, ""), 0.0, e.scope)
+                record(spent, qid, None, e.message)
                 continue
-            job = _Job(qid, retrieval, time.monotonic() - start, scope, route, route_aux)
+            job = _Job(qid, prep.retrieval, prep.retrieve_s, prep.scope, prep.route, prep.route_aux)
             if backend is None or prompt is None:
                 record(job, qid, None, None)
                 continue
-            fut = pool.submit(
-                backend.generate,
-                prompt.system,
-                prompt.render(question, retrieval.hits, periods, facts_text),
-            )
+            fut = pool.submit(backend.generate, prompt.system, prep.render(prompt, periods))
             in_flight[fut] = job
             while len(in_flight) >= concurrency:
                 done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
