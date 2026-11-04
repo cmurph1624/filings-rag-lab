@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     # The serving app's own tables (served_queries, feedback). Empty: same as database_url.
     app_database_url: str = ""
+    # Salt for hashing client addresses (rate limit); set it in production so hashes survive
+    # restarts. Empty: a random salt per process.
+    ip_hash_salt: str = ""
+    serve_tag: str = "local"  # tags served_queries rows (and traces): local, prod
 
     @property
     def app_db(self) -> str:

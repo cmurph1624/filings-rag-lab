@@ -696,6 +696,11 @@ def serve_cmd(
     config: str = typer.Option("configs/serve.toml", help="Serving config"),
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(8000, help="Port"),
+    forwarded_allow_ips: str = typer.Option(
+        "127.0.0.1",
+        help="Proxies whose X-Forwarded-For is trusted for the client address (the rate"
+        " limit's key); in production, the Caddy container's address",
+    ),
 ) -> None:
     """Run the public app (FastAPI) over the serving config's pipeline.
 
@@ -714,7 +719,9 @@ def serve_cmd(
     sha = os.environ.get("GIT_SHA") or harness.git_info(ROOT).sha
     app_ = create_app(lambda: Service.from_config(cfg, settings, sha))
     typer.echo(f"serving {cfg.base} ({cfg.run.hash}) with {cfg.run.generation} on {host}:{port}")
-    uvicorn.run(app_, host=host, port=port)
+    uvicorn.run(
+        app_, host=host, port=port, proxy_headers=True, forwarded_allow_ips=forwarded_allow_ips
+    )
 
 
 @app.command("judge")

@@ -73,6 +73,10 @@ function linkCitations(text, excerpts, facts) {
 
 function render(r) {
   const out = $("#out");
+  if (r.status === "refused") {
+    out.innerHTML = `<div class="card">${esc(r.message || "That question can't be answered right now.")}</div>`;
+    return;
+  }
   if (r.status !== "answered") {
     out.innerHTML = `<div class="card err">${esc(r.error || "Something went wrong.")}</div>`;
     return;

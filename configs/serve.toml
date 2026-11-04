@@ -11,3 +11,9 @@ prompt = "answer@4"
 
 [serve]
 max_question_chars = 500
+refuse_unscoped = true   # a question naming no covered company gets a refusal, no model call
+rate_per_ip_hour = 10    # accepted questions per client per rolling hour
+daily_cap_usd = 3.0      # API-equivalent spend per UTC day (generation + embedding + rerank)
+reserve_usd = 0.06       # held per question until its real cost is known (~3x a typical answer)
+max_concurrency = 3      # questions worked on at once
+busy_wait_s = 30.0       # how long a request waits for a free slot before "busy"
