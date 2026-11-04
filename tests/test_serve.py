@@ -16,7 +16,8 @@ from filings_rag.backends.base import BackendError, Result
 from filings_rag.harness.answer import REPO_ROOT, AnswerContext
 from filings_rag.harness.prompts import get_prompt
 from filings_rag.pricing import Usage
-from filings_rag.retrieve.base import Hit, Retrieval
+from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
+from filings_rag.retrieve.scope import Scope
 from filings_rag.serve import citations
 from filings_rag.serve import config as serve_config
 from filings_rag.serve import service as service_mod
@@ -175,24 +176,26 @@ def backend() -> Backend:
     return Backend()
 
 
+def service(backend: Backend, **kw: Any) -> Service:
+    args: dict[str, Any] = {
+        "ctx": AnswerContext(retriever=Retriever()),  # type: ignore[arg-type]
+        "backend": backend,
+        "prompt": get_prompt("answer@4"),
+        "periods": None,
+        "docs": DOCS,
+        "index_conn": psycopg.connect(os.environ["DATABASE_URL"]),
+        "app_url": os.environ["DATABASE_URL"],
+        "config_hash": CONFIG_HASH,
+        "pipeline": "nope@1",
+        "git_sha": "abc123",
+        "max_question_chars": 50,
+    }
+    return Service(**(args | kw))
+
+
 @pytest.fixture
 def client(conn: psycopg.Connection[Any], backend: Backend) -> Iterator[TestClient]:
-    def factory() -> Service:
-        return Service(
-            ctx=AnswerContext(retriever=Retriever()),  # type: ignore[arg-type]
-            backend=backend,
-            prompt=get_prompt("answer@4"),
-            periods=None,
-            docs=DOCS,
-            index_conn=psycopg.connect(os.environ["DATABASE_URL"]),
-            app_url=os.environ["DATABASE_URL"],
-            config_hash=CONFIG_HASH,
-            pipeline="nope@1",
-            git_sha="abc123",
-            max_question_chars=50,
-        )
-
-    with TestClient(create_app(factory)) as c:
+    with TestClient(create_app(lambda: service(backend))) as c:
         yield c
 
 
@@ -290,3 +293,40 @@ def test_health_version_and_page(client: TestClient, monkeypatch: pytest.MonkeyP
     }
     page = client.get("/")
     assert page.status_code == 200 and "Filings RAG Lab" in page.text
+
+
+class FailingRetriever:
+    def retrieve(self, query: str, documents: list[int] | None = None) -> Retrieval:
+        raise RetrievalError("db down", embed_tokens=9, embedder="voyage-finance-2")
+
+
+class OneScoper:
+    def scope(self, question_id: str, question: str) -> Scope:
+        return Scope([1], {"mode": "rules", "level": "filings", "docs": ["ZZ_2022_10K"]})
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_a_retrieval_failure_keeps_its_scope_and_embedding_spend(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    ctx = AnswerContext(retriever=FailingRetriever(), scoper=OneScoper())  # type: ignore[arg-type]
+    with TestClient(create_app(lambda: service(backend, ctx=ctx))) as c:
+        r = c.post("/ask", json={"question": "ZZ FY2022 revenue?"})
+    assert r.status_code == 502 and backend.prompts == []
+    rec = row(conn, r.json()["query_id"])
+    assert rec["error"].startswith("retrieval: RetrievalError")
+    assert rec["scope"]["docs"] == ["ZZ_2022_10K"]
+    assert rec["embed_tokens"] == 9 and rec["cost_usd"] == pytest.approx(9 * 0.12e-6)
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_a_failed_record_write_still_returns_the_paid_answer(
+    backend: Backend, caplog: pytest.LogCaptureFixture
+) -> None:
+    bad = "postgresql://nobody:x@127.0.0.1:1/none"
+    with TestClient(create_app(lambda: service(backend, app_url=bad))) as c:
+        r = c.post("/ask", json={"question": "ZZ FY2022 revenue?"})
+    assert r.status_code == 200 and r.json()["answer"].endswith("[1].")
+    assert "served_queries write failed" in caplog.text and r.json()["query_id"] in caplog.text

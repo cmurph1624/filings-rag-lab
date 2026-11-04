@@ -6,6 +6,7 @@ seconds, runs outside it. Each request writes its row on its own connection to t
 database, so a failed write never leaves the index connection mid-transaction.
 """
 
+import logging
 import threading
 import time
 import uuid
@@ -27,9 +28,11 @@ from filings_rag.harness.answer import prepare as prepare_question
 from filings_rag.harness.prompts import Prompt, get_prompt
 from filings_rag.harness.run import document_periods, pipeline_index
 from filings_rag.pricing import Usage, embedding_cost, model_cost
+from filings_rag.retrieve.base import RetrievalError
 from filings_rag.serve import citations
 from filings_rag.serve.config import ServeConfig
 
+log = logging.getLogger(__name__)
 PUBLIC_ERROR = "The answer couldn't be produced just now. Please try again later."
 
 
@@ -76,6 +79,37 @@ VALUES
      %(generate_s)s, %(retrieved)s, %(scope)s, %(route)s, %(config_hash)s, %(git_sha)s,
      %(ip_hash)s, %(tags)s)
 """
+
+
+@dataclass(frozen=True)
+class _Spend:
+    """USD at list price: generation, query embedding, rerank."""
+
+    embed_tokens: int = 0
+    gen: float = 0.0
+    embed: float = 0.0
+    rerank: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.gen + self.embed + self.rerank
+
+    @classmethod
+    def of(
+        cls, prep: Prepared | None, failed: StageError | None, result: Result | None
+    ) -> "_Spend":
+        tokens, embedder, rerank = 0, "", 0.0
+        if prep is not None:
+            tokens, embedder = prep.retrieval.embed_tokens, prep.retrieval.embedder
+            rerank = float(prep.retrieval.aux.get("rerank", {}).get("cost_usd", 0.0))
+        elif failed is not None and isinstance(failed.cause, RetrievalError):
+            tokens, embedder = failed.cause.embed_tokens, failed.cause.embedder  # paid anyway
+        return cls(
+            tokens,
+            model_cost(result.model, result.usage) if result else 0.0,
+            embedding_cost(embedder, tokens) if tokens else 0.0,
+            rerank,
+        )
 
 
 class Service:
@@ -165,12 +199,13 @@ class Service:
         prep: Prepared | None = None
         result: Result | None = None
         error: str | None = None
+        failed: StageError | None = None
         with self._lock:
             try:
                 prep = prepare_question(self.ctx, str(qid), question)
             except StageError as e:
                 self.index_conn.rollback()
-                error = e.message
+                error, failed = e.message, e
             else:
                 self.index_conn.commit()  # end the read transaction; don't hold it while idle
         if prep is not None:
@@ -179,8 +214,18 @@ class Service:
                 result = self.backend.generate(self.prompt.system, rendered)
             except Exception as e:
                 error = f"generate: {type(e).__name__}: {e}"
-        asked, costs = self._finish(qid, prep, result, error, start)
-        self._record(asked, question, prep, result, costs, ip_hash, tags)
+        spend = _Spend.of(prep, failed, result)
+        asked = self._finish(qid, prep, result, error, spend, start)
+        try:
+            self._record(asked, question, prep, failed, result, spend, ip_hash, tags)
+        except Exception:  # the answer was paid for: return it, and keep the spend in the log
+            log.exception(
+                "served_queries write failed: id=%s status=%s cost_usd=%.6f tokens=%s",
+                asked.query_id,
+                asked.status,
+                asked.cost_usd,
+                result.usage if result else None,
+            )
         return asked
 
     def _finish(
@@ -189,40 +234,36 @@ class Service:
         prep: Prepared | None,
         result: Result | None,
         error: str | None,
+        spend: "_Spend",
         start: float,
-    ) -> tuple[Asked, tuple[float, float, float]]:
-        """The response, and the (generation, embedding, rerank) costs in USD."""
-        gen = model_cost(result.model, result.usage) if result else 0.0
-        emb = rr = 0.0
-        if prep is not None:
-            if prep.retrieval.embed_tokens:
-                emb = embedding_cost(prep.retrieval.embedder, prep.retrieval.embed_tokens)
-            rr = float(prep.retrieval.aux.get("rerank", {}).get("cost_usd", 0.0))
+    ) -> Asked:
         asked = Asked(
             qid,
             "error" if error else "answered",
             error=error,
             model=result.model if result else None,
-            cost_usd=gen + emb + rr,
+            cost_usd=spend.total,
             latency_s=time.monotonic() - start,
         )
         if result is not None and prep is not None:
             asked.answer = result.text
             asked.excerpts = citations.excerpts(result.text, prep.retrieval.hits, self.docs)
             asked.facts = citations.facts(prep.route, self.docs)
-        return asked, (gen, emb, rr)
+        return asked
 
     def _record(
         self,
         asked: Asked,
         question: str,
         prep: Prepared | None,
+        failed: StageError | None,
         result: Result | None,
-        costs: tuple[float, float, float],
+        spend: "_Spend",
         ip_hash: str | None,
         tags: tuple[str, ...],
     ) -> None:
-        gen, emb, rr = costs
+        # A failed stage still records the scope it reached (StageError.scope).
+        scope = prep.scope if prep else (failed.scope if failed else None)
         usage = result.usage if result else Usage()
         hits = prep.retrieval.hits if prep else []
         retrieved = [
@@ -245,15 +286,15 @@ class Service:
                     "out": usage.output_tokens,
                     "cr": usage.cache_read_tokens,
                     "cw": usage.cache_write_tokens + usage.cache_write_1h_tokens,
-                    "emb": prep.retrieval.embed_tokens if prep else 0,
-                    "gen": gen,
-                    "embc": emb,
-                    "rr": rr,
+                    "emb": spend.embed_tokens,
+                    "gen": spend.gen,
+                    "embc": spend.embed,
+                    "rr": spend.rerank,
                     "cost": asked.cost_usd,
                     "retrieve_s": prep.retrieve_s if prep else None,
                     "generate_s": result.latency_s if result else None,
                     "retrieved": Jsonb(retrieved),
-                    "scope": Jsonb(prep.scope.record) if prep and prep.scope else None,
+                    "scope": Jsonb(scope.record) if scope else None,
                     "route": Jsonb(prep.route) if prep and prep.route is not None else None,
                     "config_hash": self.config_hash,
                     "git_sha": self.git_sha,
