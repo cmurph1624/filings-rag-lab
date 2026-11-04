@@ -1,0 +1,83 @@
+"""FastAPI app: `/ask`, `/feedback`, `/healthz`, `/version` and a static page.
+
+Handlers are plain functions, so FastAPI runs them in its threadpool; the Service serializes
+what must be serialized. `create_app` takes a factory so tests can build the Service from fakes;
+`frl serve` builds it from `configs/serve.toml`.
+"""
+
+import uuid
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
+
+from filings_rag.serve.service import QuestionTooLong, Service
+
+STATIC = Path(__file__).parent / "static"
+
+
+class AskBody(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)  # the Service applies the real limit
+
+
+class FeedbackBody(BaseModel):
+    query_id: uuid.UUID
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+def create_app(factory: Callable[[], Service]) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.service = factory()
+        try:
+            yield
+        finally:
+            app.state.service.close()
+
+    app = FastAPI(title="Filings RAG Lab", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    def service(request: Request) -> Service:
+        svc: Service = request.app.state.service
+        return svc
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(STATIC / "index.html")
+
+    @app.post("/ask")
+    def ask(body: AskBody, request: Request) -> JSONResponse:
+        try:
+            asked = service(request).ask(body.question)
+        except QuestionTooLong as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        return JSONResponse(asked.to_json(), status_code=200 if asked.status != "error" else 502)
+
+    @app.post("/feedback", status_code=204)
+    def feedback(body: FeedbackBody, request: Request) -> Response:
+        if not service(request).feedback(body.query_id, body.rating, body.comment):
+            raise HTTPException(status_code=404, detail="unknown query_id")
+        return Response(status_code=204)
+
+    @app.get("/healthz")
+    def healthz(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(service(request).health())
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": type(e).__name__}, status_code=503)
+
+    @app.get("/version")
+    def version(request: Request) -> dict[str, str]:
+        svc = service(request)
+        return {
+            "sha": svc.git_sha,
+            "config_hash": svc.config_hash,
+            "pipeline": svc.pipeline,
+            "model": getattr(svc.backend, "model", ""),
+        }
+
+    return app
