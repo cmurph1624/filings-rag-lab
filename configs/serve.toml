@@ -1,0 +1,13 @@
+# The public deployment (P4): run 846's pipeline exactly (configs/p2-04-router-rules-facts.toml:
+# structured@1, rules scope, rerank-3 over 50, rules router, answer@4) with the answer model on
+# the Anthropic API instead of claude-cli. Only [generation] is replaced; [serve] is how the app
+# runs and is not part of the config hash.
+base = "configs/p2-04-router-rules-facts.toml"
+
+[generation]
+backend = "anthropic-api"
+model = "claude-sonnet-5-5"
+prompt = "answer@4"
+
+[serve]
+max_question_chars = 500

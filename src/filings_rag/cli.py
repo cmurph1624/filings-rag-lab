@@ -691,6 +691,32 @@ def run_cmd(
         raise typer.Exit(1)
 
 
+@app.command("serve")
+def serve_cmd(
+    config: str = typer.Option("configs/serve.toml", help="Serving config"),
+    host: str = typer.Option("127.0.0.1", help="Bind address"),
+    port: int = typer.Option(8000, help="Port"),
+) -> None:
+    """Run the public app (FastAPI) over the serving config's pipeline.
+
+    It answers with the Anthropic API and records every query in `served_queries` (in
+    APP_DATABASE_URL, or DATABASE_URL when unset). Every /ask costs API money."""
+    import os
+
+    import uvicorn
+
+    from filings_rag.serve import config as serve_config
+    from filings_rag.serve.app import create_app
+    from filings_rag.serve.service import Service
+
+    cfg = serve_config.load(Path(config))
+    settings = get_settings()
+    sha = os.environ.get("GIT_SHA") or harness.git_info(ROOT).sha
+    app_ = create_app(lambda: Service.from_config(cfg, settings, sha))
+    typer.echo(f"serving {cfg.base} ({cfg.run.hash}) with {cfg.run.generation} on {host}:{port}")
+    uvicorn.run(app_, host=host, port=port)
+
+
 @app.command("judge")
 def judge_cmd(
     run_id: int = typer.Argument(..., help="Run to grade"),

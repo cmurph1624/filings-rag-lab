@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Filings RAG Lab</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1d1d1b; --muted:#6b6a65; --line:#e3e1da; --card:#ffffff;
+          --accent:#2f5d8a; --warn:#8a5a2f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151514; --fg:#ecebe6; --muted:#9a998f; --line:#2c2b28; --card:#1d1d1b;
+            --accent:#8bb4dd; --warn:#d9a774; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; font-size:.95rem; }
+  form { display:flex; gap:8px; }
+  textarea { flex:1; min-height:3.2em; resize:vertical; padding:10px 12px; font:inherit;
+             color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  button { font:inherit; padding:8px 16px; border-radius:8px; border:1px solid var(--accent);
+           background:var(--accent); color:var(--bg); cursor:pointer; }
+  button[disabled] { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--fg); border-color:var(--line); padding:4px 10px; }
+  button.ghost.on { border-color:var(--accent); color:var(--accent); }
+  .note { color:var(--muted); font-size:.85rem; margin:8px 0 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:16px 18px; margin-top:24px; }
+  .answer { white-space:pre-wrap; }
+  .answer a { color:var(--accent); text-decoration:none; font-size:.8em; vertical-align:super; }
+  .err { color:var(--warn); }
+  h2 { font-size:1rem; margin:20px 0 8px; }
+  ol.src { list-style:none; padding:0; margin:0; }
+  ol.src li { border-top:1px solid var(--line); padding:10px 0; font-size:.9rem; }
+  ol.src li.dim { opacity:.6; }
+  .tag { display:inline-block; min-width:2.4em; color:var(--accent); font-weight:600; }
+  .meta { color:var(--muted); }
+  .snip { color:var(--muted); margin-top:4px; font-size:.85rem; overflow-wrap:anywhere; }
+  a { color:var(--accent); }
+  .row { display:flex; align-items:center; gap:8px; margin-top:16px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Filings RAG Lab</h1>
+  <p class="sub">Ask about the SEC filings of the companies in FinanceBench's open subset,
+    fiscal years 2015–2023. Answers cite the filing excerpts and XBRL facts they use.
+    <a href="https://github.com/patronus-ai/financebench">About the benchmark</a>.</p>
+  <form id="f">
+    <textarea id="q" maxlength="500" placeholder="e.g. What was 3M's FY2022 capital expenditure?" required></textarea>
+    <button id="go" type="submit">Ask</button>
+  </form>
+  <p class="note">Questions and answers are logged to improve the system. Don't enter personal
+    information. Answers can be wrong: check the cited filing.</p>
+  <div id="out"></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const ESC = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+const link = (url, label) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : esc(label);
+
+function linkCitations(text, excerpts, facts) {
+  const known = new Set([...excerpts.map((e) => String(e.n)), ...facts.map((f) => f.n)]);
+  return esc(text).replace(/\[((?:F?\d+)(?:\s*,\s*F?\d+)*)\]/g, (m, inner) =>
+    inner.split(",").map((k) => {
+      k = k.trim();
+      return known.has(k) ? `<a href="#src-${esc(k)}">[${esc(k)}]</a>` : `[${esc(k)}]`;
+    }).join(""));
+}
+
+function render(r) {
+  const out = $("#out");
+  if (r.status !== "answered") {
+    out.innerHTML = `<div class="card err">${esc(r.error || "Something went wrong.")}</div>`;
+    return;
+  }
+  const facts = r.facts.map((f) => `<li id="src-${esc(f.n)}"><span class="tag">${esc(f.n)}</span>
+      <b>${esc(f.metric)}</b> ${esc(f.period)} = ${esc(f.unavailable ? "unavailable" : f.value)}
+      <div class="snip">${esc(f.formula || f.unavailable || "")} · ${link(f.url, f.filing)}</div></li>`).join("");
+  const excerpts = [...r.excerpts].sort((a, b) => (b.cited - a.cited) || (a.n - b.n)).map((e) => `
+      <li id="src-${e.n}" class="${e.cited ? "" : "dim"}"><span class="tag">[${e.n}]</span>
+      ${link(e.url, e.doc_name)}
+      <span class="meta">· page ${esc(e.page)}${e.section ? " · " + esc(e.section) : ""}${e.cited ? "" : " · not cited"}</span>
+      <div class="snip">${esc(e.snippet)}…</div></li>`).join("");
+  out.innerHTML = `<div class="card">
+      <div class="answer">${linkCitations(r.answer, r.excerpts, r.facts)}</div>
+      <div class="row"><span class="meta">Was this right?</span>
+        <button class="ghost" data-r="up" type="button" aria-label="Yes">👍</button>
+        <button class="ghost" data-r="down" type="button" aria-label="No">👎</button>
+        <span id="fb" class="meta"></span></div>
+      ${facts ? `<h2>Facts (computed from XBRL)</h2><ol class="src">${facts}</ol>` : ""}
+      <h2>Excerpts</h2><ol class="src">${excerpts}</ol>
+      <p class="note">${esc(r.model)} · ${esc(r.latency_s)} s · $${Number(r.cost_usd).toFixed(4)} at API list price</p>
+    </div>`;
+  out.querySelectorAll("button[data-r]").forEach((b) => b.onclick = async () => {
+    out.querySelectorAll("button[data-r]").forEach((x) => x.classList.toggle("on", x === b));
+    const res = await fetch("/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query_id: r.query_id, rating: b.dataset.r})});
+    $("#fb").textContent = res.ok ? "Thanks." : "Couldn't save that.";
+  });
+}
+
+$("#f").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) return;
+  $("#go").disabled = true;
+  $("#out").innerHTML = `<div class="card meta">Reading the filings… (10–20 s)</div>`;
+  try {
+    const res = await fetch("/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question: q})});
+    const body = await res.json();
+    render(body.status ? body : {status: "error", error: typeof body.detail === "string" ? body.detail : "That question couldn't be processed."});
+  } catch (e) {
+    render({status: "error", error: "Network error. Try again."});
+  } finally {
+    $("#go").disabled = false;
+  }
+};
+$("#q").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); }
+});
+</script>
+</body>
+</html>
