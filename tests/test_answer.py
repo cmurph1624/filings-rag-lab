@@ -170,3 +170,15 @@ def test_build_reads_the_retriever_spec() -> None:
     c = AnswerContext.build(None, spec, Retriever())  # type: ignore[arg-type]
     assert (c.decompose, c.k, c.decompose_merge) == (True, 7, "score")
     assert c.fact_route is None  # no router, no facts
+
+
+def test_refuse_unscoped_stops_before_route_and_retrieval() -> None:
+    from filings_rag.harness.answer import Unscoped
+
+    scope = Scope([1, 2], {"mode": "rules", "level": "corpus", "docs": []})
+    r = Retriever()
+    with pytest.raises(Unscoped) as e:
+        prepare(ctx(retriever=r, scoper=Scoper(scope), refuse_unscoped=True), "q1", "Hi?")
+    assert e.value.scope is scope and r.calls == []
+    prepare(ctx(retriever=r, scoper=Scoper(scope)), "q1", "Hi?")  # benchmarks: off by default
+    assert r.calls == [[1, 2]]

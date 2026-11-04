@@ -1,6 +1,8 @@
 """The serving app: config, citations, and the HTTP endpoints over a fake pipeline."""
 
+import datetime as dt
 import os
+import threading
 import tomllib
 import uuid
 from collections.abc import Iterator
@@ -22,6 +24,7 @@ from filings_rag.serve import citations
 from filings_rag.serve import config as serve_config
 from filings_rag.serve import service as service_mod
 from filings_rag.serve.app import create_app
+from filings_rag.serve.limits import Limits, Refused, ip_hash, seconds_to_utc_midnight
 from filings_rag.serve.service import PUBLIC_ERROR, Service
 
 # --- config -----------------------------------------------------------------------------------
@@ -136,6 +139,8 @@ def test_facts_link_their_anchor_filing() -> None:
 # --- the app ----------------------------------------------------------------------------------
 
 CONFIG_HASH = "zz-serve-test"
+SALT = "zz-test-salt"
+CLIENT = ip_hash("testclient", SALT)  # TestClient's client address
 
 
 class Retriever:
@@ -169,6 +174,7 @@ def conn() -> Iterator[psycopg.Connection[Any]]:
         c.rollback()
     with psycopg.connect(url) as c:
         c.execute("DELETE FROM served_queries WHERE config_hash = %s", (CONFIG_HASH,))
+        c.execute("DELETE FROM rate_events WHERE ip_hash = %s", (CLIENT,))
 
 
 @pytest.fixture
@@ -189,6 +195,7 @@ def service(backend: Backend, **kw: Any) -> Service:
         "pipeline": "nope@1",
         "git_sha": "abc123",
         "max_question_chars": 50,
+        "ip_salt": SALT,
     }
     return Service(**(args | kw))
 
@@ -323,10 +330,188 @@ def test_a_retrieval_failure_keeps_its_scope_and_embedding_spend(
 @pytest.mark.db
 @pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
 def test_a_failed_record_write_still_returns_the_paid_answer(
-    backend: Backend, caplog: pytest.LogCaptureFixture
+    conn: psycopg.Connection[Any],
+    backend: Backend,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bad = "postgresql://nobody:x@127.0.0.1:1/none"
-    with TestClient(create_app(lambda: service(backend, app_url=bad))) as c:
+    def boom(*a: Any, **kw: Any) -> None:
+        raise psycopg.OperationalError("app db gone")
+
+    monkeypatch.setattr(Service, "_record", boom)
+    with TestClient(create_app(lambda: service(backend))) as c:
         r = c.post("/ask", json={"question": "ZZ FY2022 revenue?"})
     assert r.status_code == 200 and r.json()["answer"].endswith("[1].")
     assert "served_queries write failed" in caplog.text and r.json()["query_id"] in caplog.text
+    # The reservation stays, so the cap still counts this question (conservatively).
+    assert row(conn, r.json()["query_id"])["status"] == "reserved"
+
+
+# --- guardrails -------------------------------------------------------------------------------
+
+
+class NoCompanyScoper:
+    def scope(self, question_id: str, question: str) -> Scope:
+        return Scope([1, 2, 3], {"mode": "rules", "level": "corpus", "docs": []})
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_out_of_coverage_is_refused_before_any_spend(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    retriever = Retriever()
+    ctx = AnswerContext(retriever=retriever, scoper=NoCompanyScoper(), refuse_unscoped=True)  # type: ignore[arg-type]
+    with TestClient(
+        create_app(lambda: service(backend, ctx=ctx, companies=["3M", "Zeta Corp"]))
+    ) as c:
+        r = c.post("/ask", json={"question": "What is the capital of France?"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "refused" and body["refusal"] == "out_of_coverage"
+    assert "3M, Zeta Corp" in body["message"] and body["answer"] is None
+    assert backend.prompts == []
+    rec = row(conn, body["query_id"])
+    assert (rec["status"], rec["refusal"], rec["cost_usd"]) == ("refused", "out_of_coverage", 0)
+    assert rec["scope"]["level"] == "corpus"
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_the_rate_limit_counts_accepted_questions_per_client(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    with TestClient(create_app(lambda: service(backend, limits=Limits(rate_per_ip_hour=2)))) as c:
+        codes = [c.post("/ask", json={"question": "ZZ FY2022 revenue?"}) for _ in range(3)]
+    assert [r.status_code for r in codes] == [200, 200, 429]
+    third = codes[2]
+    assert third.json()["refusal"] == "rate_limited"
+    assert 3000 < int(third.headers["Retry-After"]) <= 3600
+    assert len(backend.prompts) == 2
+    n = conn.execute("SELECT count(*) FROM served_queries WHERE config_hash = %s", (CONFIG_HASH,))
+    assert n.fetchone() == (2,)  # a rate-limited request leaves no row
+    conn.commit()
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_the_daily_cap_reserves_then_settles(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    before = Limits().spent_today(conn)
+    conn.commit()
+    # Each answer costs ~$0.00305 once settled; a reservation holds $0.06 until then.
+    lim = Limits(daily_cap_usd=before + 0.065, reserve_usd=0.06)
+    with TestClient(create_app(lambda: service(backend, limits=lim))) as c:
+        rs = [c.post("/ask", json={"question": "ZZ FY2022 revenue?"}) for _ in range(3)]
+    assert [r.status_code for r in rs] == [200, 200, 503]  # 2 settled + a reservation > cap
+    assert rs[2].json()["refusal"] == "daily_cap" and int(rs[2].headers["Retry-After"]) > 0
+    rec = row(conn, rs[0].json()["query_id"])
+    assert rec["status"] == "answered" and rec["cost_usd"] == pytest.approx(0.00305, abs=1e-5)
+    refused = conn.execute(
+        "SELECT status, refusal, cost_usd FROM served_queries"
+        " WHERE config_hash = %s AND status = 'refused'",
+        (CONFIG_HASH,),
+    ).fetchall()
+    conn.commit()
+    assert refused == [("refused", "daily_cap", 0.0)]
+    assert len(backend.prompts) == 2
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_concurrent_reservations_at_the_cap_admit_one(conn: psycopg.Connection[Any]) -> None:
+    before = Limits().spent_today(conn)
+    conn.commit()
+    lim = Limits(daily_cap_usd=before + 0.09, reserve_usd=0.06)
+    barrier = threading.Barrier(2)
+    reserve_row = {
+        "question": "q",
+        "config_hash": CONFIG_HASH,
+        "git_sha": "x",
+        "ip_hash": None,
+        "tags": [],
+    }
+    outcomes: list[str] = []
+
+    def go() -> None:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+            barrier.wait()
+            try:
+                lim.reserve(c, uuid.uuid4(), reserve_row)
+                outcomes.append("reserved")
+            except Refused as e:
+                outcomes.append(e.kind)
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["daily_cap", "reserved"]
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_yesterdays_spend_does_not_count(conn: psycopg.Connection[Any]) -> None:
+    before = Limits().spent_today(conn)
+    conn.execute(
+        "INSERT INTO served_queries (question, status, cost_usd, config_hash, git_sha, created_at)"
+        " VALUES ('old', 'answered', 100, %s, 'x', now() - interval '1 day')",
+        (CONFIG_HASH,),
+    )
+    conn.commit()
+    assert Limits().spent_today(conn) == pytest.approx(before)
+    conn.commit()
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_busy_when_every_slot_is_taken(conn: psycopg.Connection[Any], backend: Backend) -> None:
+    lim = Limits(max_concurrency=1, busy_wait_s=0.01)
+    lim.acquire()  # someone else holds the only slot
+    with TestClient(create_app(lambda: service(backend, limits=lim))) as c:
+        r = c.post("/ask", json={"question": "ZZ FY2022 revenue?"})
+    assert r.status_code == 503 and r.json()["refusal"] == "busy"
+    assert backend.prompts == []
+
+
+def test_utc_midnight_and_ip_hash() -> None:
+    now = dt.datetime(2026, 11, 3, 23, 59, 30, tzinfo=dt.UTC)
+    assert seconds_to_utc_midnight(now) == 30
+    assert ip_hash("1.2.3.4", "a") != ip_hash("1.2.3.4", "b")
+    assert len(ip_hash("1.2.3.4", "a")) == 32 and "1.2.3.4" not in ip_hash("1.2.3.4", "a")
+
+
+def test_serve_config_sets_the_guardrails() -> None:
+    cfg = serve_config.load(REPO_ROOT / "configs" / "serve.toml")
+    assert cfg.refuse_unscoped is True
+    lim = Limits.from_config(cfg.serve)
+    assert (lim.rate_per_ip_hour, lim.daily_cap_usd, lim.reserve_usd) == (10, 3.0, 0.06)
+    assert lim.max_concurrency == 3
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_parallel_requests_from_one_client_cannot_overshoot_the_rate_limit(
+    conn: psycopg.Connection[Any],
+) -> None:
+    lim = Limits(rate_per_ip_hour=3)
+    barrier = threading.Barrier(6)
+    outcomes: list[str] = []
+
+    def go() -> None:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+            barrier.wait()
+            try:
+                lim.check_rate(c, CLIENT)
+                outcomes.append("ok")
+            except Refused as e:
+                outcomes.append(e.kind)
+
+    threads = [threading.Thread(target=go) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["ok"] * 3 + ["rate_limited"] * 3

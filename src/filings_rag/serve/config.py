@@ -12,8 +12,12 @@ from typing import Any
 
 from filings_rag.harness.answer import REPO_ROOT
 from filings_rag.harness.config import RunConfig, from_dict
+from filings_rag.serve.limits import LIMIT_DEFAULTS
 
-SERVE_DEFAULTS: dict[str, Any] = {"max_question_chars": 500}
+SERVE_DEFAULTS: dict[str, Any] = {
+    "max_question_chars": 500,
+    "refuse_unscoped": True,  # no company found: refuse without a model call
+} | LIMIT_DEFAULTS
 LOCAL_ONLY_BACKENDS = {"claude-cli"}
 
 
@@ -26,6 +30,10 @@ class ServeConfig:
     @property
     def max_question_chars(self) -> int:
         return int(self.serve["max_question_chars"])
+
+    @property
+    def refuse_unscoped(self) -> bool:
+        return bool(self.serve["refuse_unscoped"])
 
 
 def from_dict_serve(raw: dict[str, Any], root: Path = REPO_ROOT) -> ServeConfig:

@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from filings_rag.serve.limits import Refused
 from filings_rag.serve.service import QuestionTooLong, Service
 
 STATIC = Path(__file__).parent / "static"
@@ -51,11 +52,20 @@ def create_app(factory: Callable[[], Service]) -> FastAPI:
 
     @app.post("/ask")
     def ask(body: AskBody, request: Request) -> JSONResponse:
+        # Behind Caddy, uvicorn's proxy headers make this the client's address.
+        client = request.client.host if request.client else None
         try:
-            asked = service(request).ask(body.question)
+            asked = service(request).ask(body.question, client_ip=client)
         except QuestionTooLong as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
-        return JSONResponse(asked.to_json(), status_code=200 if asked.status != "error" else 502)
+        except Refused as e:
+            headers = {"Retry-After": str(e.retry_after)} if e.retry_after else None
+            return JSONResponse(
+                {"status": "refused", "refusal": e.kind, "message": e.message},
+                status_code=e.status_code,
+                headers=headers,
+            )
+        return JSONResponse(asked.to_json(), status_code=502 if asked.status == "error" else 200)
 
     @app.post("/feedback", status_code=204)
     def feedback(body: FeedbackBody, request: Request) -> Response:

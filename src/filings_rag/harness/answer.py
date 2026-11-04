@@ -87,6 +87,9 @@ class AnswerContext:
     decompose: bool = False
     k: int = 10
     decompose_merge: str = "round-robin"
+    # Serving only: stop after the scope step when it found no company (level "corpus"), before
+    # any embedding, rerank or model spend. Benchmark runs leave it off.
+    refuse_unscoped: bool = False
 
     @classmethod
     def build(
@@ -128,6 +131,14 @@ class Prepared:
         return prompt.render(self.question, self.retrieval.hits, periods, self.facts_text)
 
 
+class Unscoped(Exception):
+    """The question names no company in the corpus (`AnswerContext.refuse_unscoped`)."""
+
+    def __init__(self, scope: Scope) -> None:
+        self.scope = scope
+        super().__init__("no company in the corpus was found in the question")
+
+
 class StageError(Exception):
     """A step failed. `message` is what a run records as the row's error; `scope` is set when
     the scope step had already succeeded."""
@@ -141,8 +152,9 @@ class StageError(Exception):
 
 
 def prepare(ctx: AnswerContext, question_id: str, question: str) -> Prepared:
-    """Scope, route, facts and retrieval for one question. Raises `UsagePaused` or
-    `StageError`; the fact step never raises (see `FactRoute.run`)."""
+    """Scope, route, facts and retrieval for one question. Raises `UsagePaused`, `StageError`,
+    or `Unscoped` (only with `refuse_unscoped`); the fact step never raises (see
+    `FactRoute.run`)."""
     start = time.monotonic()
     scope: Scope | None = None
     if ctx.scoper is not None:
@@ -152,6 +164,8 @@ def prepare(ctx: AnswerContext, question_id: str, question: str) -> Prepared:
             raise
         except Exception as e:
             raise StageError("scope", e) from e
+        if ctx.refuse_unscoped and scope.record.get("level") == "corpus":
+            raise Unscoped(scope)
     route: dict[str, Any] | None = None
     route_aux: dict[str, Any] | None = None
     facts_text = ""
