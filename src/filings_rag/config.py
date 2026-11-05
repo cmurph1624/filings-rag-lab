@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # restarts. Empty: a random salt per process.
     ip_hash_salt: str = ""
     serve_tag: str = "local"  # tags served_queries rows (and traces): local, prod
+    # Langfuse tracing for the serving app; off unless both keys are set.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
 
     @property
     def app_db(self) -> str:
