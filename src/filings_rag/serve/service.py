@@ -4,6 +4,10 @@ The pipeline objects share one index connection and aren't thread-safe, so scope
 and retrieval run under a lock (they take well under a second); generation, which takes
 seconds, runs outside it. Each request writes its row on its own connection to the app
 database, so a failed write never leaves the index connection mid-transaction.
+
+Every question that passes the rate limit is traced (`filings_rag.trace`): the trace id is the
+query id in hex, stored in `served_queries.trace_id` when tracing is on, and a rating becomes a
+`user-feedback` score on it (1 up, 0 down).
 """
 
 import csv
@@ -42,7 +46,8 @@ from filings_rag.retrieve.base import RetrievalError
 from filings_rag.retrieve.scope import Scope
 from filings_rag.serve import citations, limits
 from filings_rag.serve.config import ServeConfig
-from filings_rag.serve.limits import Limits
+from filings_rag.serve.limits import Limits, Refused
+from filings_rag.trace import NOOP, LangfuseTracer, Span, Tracer, compact
 
 log = logging.getLogger(__name__)
 PUBLIC_ERROR = "The answer couldn't be produced just now. Please try again later."
@@ -94,12 +99,12 @@ INSERT INTO served_queries
     (id, question, status, refusal, error, answer, model, stop_reason, input_tokens,
      output_tokens, cache_read_tokens, cache_write_tokens, embed_tokens, gen_cost_usd,
      embed_cost_usd, rerank_cost_usd, cost_usd, retrieve_s, generate_s, retrieved, scope, route,
-     config_hash, git_sha, ip_hash, tags)
+     config_hash, git_sha, ip_hash, tags, trace_id)
 VALUES
     (%(id)s, %(question)s, %(status)s, %(refusal)s, %(error)s, %(answer)s, %(model)s, %(stop)s,
      %(inp)s, %(out)s, %(cr)s, %(cw)s, %(emb)s, %(gen)s, %(embc)s, %(rr)s, %(cost)s,
      %(retrieve_s)s, %(generate_s)s, %(retrieved)s, %(scope)s, %(route)s, %(config_hash)s,
-     %(git_sha)s, %(ip_hash)s, %(tags)s)
+     %(git_sha)s, %(ip_hash)s, %(tags)s, %(trace_id)s)
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status, refusal = EXCLUDED.refusal, error = EXCLUDED.error,
     answer = EXCLUDED.answer, model = EXCLUDED.model, stop_reason = EXCLUDED.stop_reason,
@@ -111,6 +116,29 @@ ON CONFLICT (id) DO UPDATE SET
     retrieve_s = EXCLUDED.retrieve_s, generate_s = EXCLUDED.generate_s,
     retrieved = EXCLUDED.retrieved, scope = EXCLUDED.scope, route = EXCLUDED.route
 """
+
+
+def make_tracer(settings: Settings, git_sha: str) -> Tracer:
+    """Langfuse when both keys are set, else the no-op. The environment is the serve tag."""
+    if settings.langfuse_public_key and settings.langfuse_secret_key:
+        return LangfuseTracer.connect(
+            settings.langfuse_public_key,
+            settings.langfuse_secret_key,
+            settings.langfuse_host,
+            environment=settings.serve_tag,
+            release=git_sha,
+        )
+    return NOOP
+
+
+def usage_details(u: Usage) -> dict[str, int]:
+    """Token counts under the names Langfuse uses for Anthropic models."""
+    return {
+        "input": u.input_tokens,
+        "output": u.output_tokens,
+        "cache_read_input_tokens": u.cache_read_tokens,
+        "cache_creation_input_tokens": u.cache_write_tokens + u.cache_write_1h_tokens,
+    }
 
 
 def coverage_message(companies: list[str]) -> str:
@@ -172,8 +200,10 @@ class Service:
         companies: list[str] | None = None,
         ip_salt: str = "",
         tag: str = "local",
+        tracer: Tracer = NOOP,
     ) -> None:
-        self.ctx = ctx
+        self.tracer = tracer
+        self.ctx = dataclasses.replace(ctx, tracer=tracer)
         self.backend = backend
         self.prompt = prompt
         self.periods = periods
@@ -198,8 +228,11 @@ class Service:
     ) -> "Service":
         run = cfg.run
         assert run.generation is not None  # serve.config refuses retrieval-only bases
+        tracer = make_tracer(settings, git_sha)
         conn = psycopg.connect(settings.database_url)
-        side = setup.retrieval_side(conn, run, settings, root / "corpus" / "companies.csv", None)
+        side = setup.retrieval_side(
+            conn, run, settings, root / "corpus" / "companies.csv", None, tracer
+        )
         ctx = AnswerContext.build(
             conn,
             run.retriever,
@@ -237,10 +270,12 @@ class Service:
             companies=read_companies(root / "corpus" / "companies.csv"),
             ip_salt=settings.ip_hash_salt,
             tag=settings.serve_tag,
+            tracer=tracer,
         )
 
     def close(self) -> None:
         self.index_conn.close()
+        self.tracer.shutdown()
 
     def ask(self, question: str, *, client_ip: str | None = None) -> Asked:
         """Raises `QuestionTooLong` (nothing recorded) or `limits.Refused`."""
@@ -253,15 +288,38 @@ class Service:
         ip_hash = limits.ip_hash(client_ip, self.ip_salt) if client_ip else None
         tags = (self.tag,)
         with psycopg.connect(self.app_url) as conn:
-            self.limits.check_rate(conn, ip_hash)  # Refused (429): nothing is recorded
+            self.limits.check_rate(conn, ip_hash)  # Refused (429): nothing recorded or traced
+        with self.tracer.trace(
+            qid.hex, "ask", input=question, tags=list(tags), metadata=self._meta()
+        ) as root:
+            try:
+                return self._admitted(qid, question, ip_hash, tags, root)
+            except Refused as e:  # busy or over the daily cap: traced, but not as an error
+                root.update(output={"status": "refused", "refusal": e.kind})
+                refused = e
+        raise refused
+
+    def _admitted(
+        self,
+        qid: uuid.UUID,
+        question: str,
+        ip_hash: str | None,
+        tags: tuple[str, ...],
+        root: Span,
+    ) -> Asked:
         self.limits.acquire()  # Refused (503) when every slot stays busy
         try:
-            return self._answer(qid, question, ip_hash, tags)
+            return self._answer(qid, question, ip_hash, tags, root)
         finally:
             self.limits.release()
 
     def _answer(
-        self, qid: uuid.UUID, question: str, ip_hash: str | None, tags: tuple[str, ...]
+        self,
+        qid: uuid.UUID,
+        question: str,
+        ip_hash: str | None,
+        tags: tuple[str, ...],
+        root: Span,
     ) -> Asked:
         start = time.monotonic()
         with psycopg.connect(self.app_url) as conn:  # Refused (503) over the daily cap
@@ -274,6 +332,7 @@ class Service:
                     "git_sha": self.git_sha,
                     "ip_hash": ip_hash,
                     "tags": list(tags),
+                    "trace_id": self._trace_id(qid),
                 },
             )
         prep: Prepared | None = None
@@ -294,14 +353,24 @@ class Service:
                 self.index_conn.commit()  # end the read transaction; don't hold it while idle
         if prep is not None:
             try:
-                rendered = prep.render(self.prompt, self.periods)
-                result = self.backend.generate(self.prompt.system, rendered)
+                result = self._generate(prep)
             except Exception as e:
                 error = f"generate: {type(e).__name__}: {e}"
         spend = _Spend.of(prep, failed, result)
         asked = self._finish(qid, prep, result, error, unscoped, spend, start)
         scope = (
             prep.scope if prep else failed.scope if failed else unscoped.scope if unscoped else None
+        )
+        root.update(
+            output={
+                "status": asked.status,
+                "refusal": asked.refusal,
+                "answer": asked.answer,
+                "error": asked.error,
+                "cost_usd": asked.cost_usd,
+            },
+            metadata=self._meta() | meta_of(prep, scope) | {"latency_s": asked.latency_s},
+            level="ERROR" if asked.error else None,
         )
         try:
             self._record(asked, question, prep, scope, result, spend, ip_hash, tags)
@@ -314,6 +383,30 @@ class Service:
                 result.usage if result else None,
             )
         return asked
+
+    def _meta(self) -> dict[str, Any]:
+        return {"config_hash": self.config_hash, "git_sha": self.git_sha, "pipeline": self.pipeline}
+
+    def _trace_id(self, qid: uuid.UUID) -> str | None:
+        return qid.hex if self.tracer.enabled else None
+
+    def _generate(self, prep: Prepared) -> Result:
+        rendered = prep.render(self.prompt, self.periods)
+        with self.tracer.observe(
+            "generate",
+            kind="generation",
+            model=getattr(self.backend, "model", None),
+            input={"system": self.prompt.system, "prompt": rendered},
+        ) as span:
+            result = self.backend.generate(self.prompt.system, rendered)
+            span.update(
+                output=result.text,
+                model=result.model,
+                usage=usage_details(result.usage),
+                cost={"total": model_cost(result.model, result.usage)},
+                metadata={"stop_reason": result.stop_reason},
+            )
+        return result
 
     def _finish(
         self,
@@ -390,21 +483,35 @@ class Service:
                     "git_sha": self.git_sha,
                     "ip_hash": ip_hash,
                     "tags": list(tags),
+                    "trace_id": self._trace_id(asked.query_id),
                 },
             )
 
     def feedback(self, query_id: uuid.UUID, rating: str, comment: str | None) -> bool:
-        """Record (or replace) a rating. False when the query id is unknown."""
+        """Record (or replace) a rating, and score its trace. False when the query id is
+        unknown."""
         with psycopg.connect(self.app_url) as conn:
             row = conn.execute(
-                "INSERT INTO feedback (query_id, rating, comment)"
-                " SELECT id, %s, %s FROM served_queries WHERE id = %s"
-                " ON CONFLICT (query_id) DO UPDATE SET rating = EXCLUDED.rating,"
-                "   comment = EXCLUDED.comment, created_at = now()"
-                " RETURNING query_id",
-                (rating, comment, query_id),
+                "WITH q AS (SELECT id, trace_id FROM served_queries WHERE id = %s),"
+                " ins AS (INSERT INTO feedback (query_id, rating, comment)"
+                "   SELECT id, %s, %s FROM q"
+                "   ON CONFLICT (query_id) DO UPDATE SET rating = EXCLUDED.rating,"
+                "     comment = EXCLUDED.comment, created_at = now()"
+                "   RETURNING query_id)"
+                " SELECT q.trace_id FROM ins JOIN q ON q.id = ins.query_id",
+                (query_id, rating, comment),
             ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        if row[0]:  # traced when it was served; the score id makes a changed rating replace it
+            self.tracer.score(
+                row[0],
+                "user-feedback",
+                1.0 if rating == "up" else 0.0,
+                comment=comment,
+                score_id=f"{row[0]}-user-feedback",
+            )
+        return True
 
     def health(self) -> dict[str, Any]:
         """Both databases answer and the served pipeline is built. No model call."""
@@ -416,3 +523,12 @@ class Service:
         with psycopg.connect(self.app_url) as conn:
             conn.execute("SELECT 1 FROM served_queries LIMIT 1")
         return {"ok": True, "pipeline": self.pipeline}
+
+
+def meta_of(prep: Prepared | None, scope: Scope | None) -> dict[str, Any]:
+    """What a trace's root carries for filtering: the scope, the route and the chunks used."""
+    return {
+        "scope": compact(scope.record) if scope else None,
+        "route": compact(prep.route) if prep and prep.route is not None else None,
+        "chunk_ids": [h.chunk_id for h in prep.retrieval.hits] if prep else [],
+    }

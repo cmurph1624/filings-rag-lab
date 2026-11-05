@@ -14,6 +14,7 @@ dependencies = [
     "anthropic>=2.3.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "langfuse>=3",
 ]
 
 [project.scripts]

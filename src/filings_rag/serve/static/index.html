@@ -52,8 +52,9 @@
     <textarea id="q" maxlength="500" placeholder="e.g. What was 3M's FY2022 capital expenditure?" required></textarea>
     <button id="go" type="submit">Ask</button>
   </form>
-  <p class="note">Questions and answers are logged to improve the system. Don't enter personal
-    information. Answers can be wrong: check the cited filing.</p>
+  <p class="note">Questions and answers are logged to improve the system, and are sent to
+    Anthropic (to answer) and Langfuse (for tracing). Don't enter personal information.
+    Answers can be wrong: check the cited filing.</p>
   <div id="out"></div>
 </main>
 <script>

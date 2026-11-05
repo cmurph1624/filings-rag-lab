@@ -19,6 +19,7 @@ from filings_rag.retrieve.base import Retriever
 from filings_rag.retrieve.factory import make_retriever, resolve_spec
 from filings_rag.retrieve.scope import Scoper, make_scoper
 from filings_rag.route.router import Router, make_router
+from filings_rag.trace import TracedEmbedder, TracedReranker, Tracer
 
 
 @dataclass
@@ -34,8 +35,10 @@ def retrieval_side(
     settings: Settings,
     companies: Path,
     cache_conn: psycopg.Connection[Any] | None,
+    tracer: Tracer | None = None,
 ) -> RetrievalSide:
-    """`cache_conn` None calls the embedder and reranker every time (`--no-cache`)."""
+    """`cache_conn` None calls the embedder and reranker every time (`--no-cache`). A `tracer`
+    (the serving app's) records each embed and rerank call as a step."""
     table, embedder_name, dims = pipeline_index(conn, cfg.pipeline)
     corpus_ids = corpora.document_ids(conn, cfg.corpus, table)
     rr = resolve_spec(cfg.retriever).get("rerank")
@@ -44,6 +47,9 @@ def retrieval_side(
     if cache_conn is not None:
         embedder = cache.CachedEmbedder(embedder, cache_conn)
         reranker = cache.CachedReranker(reranker, cache_conn) if reranker else None
+    if tracer is not None and tracer.enabled:
+        embedder = TracedEmbedder(embedder, tracer)
+        reranker = TracedReranker(reranker, tracer) if reranker else None
     retriever = make_retriever(conn, cfg.retriever, table, embedder, corpus_ids, reranker)
     scoper = make_scoper(conn, cfg.retriever.get("scope"), corpus_ids, companies)
     router = make_router(conn, cfg.router)

@@ -8,10 +8,13 @@ benchmark answer is. Nothing here touches the benchmark tables: the question is 
 Failures: `UsagePaused` passes through untouched (the caller stops cleanly). Any other failure
 raises `StageError`, naming the step and carrying what was already computed, so the caller can
 record the scope (and its spend) or the query embedding on a failed row.
+
+Each step is a `trace.Tracer` observation (`AnswerContext.tracer`, a no-op unless the serving
+app has Langfuse keys); a step that raises is marked as an error in its trace.
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,7 @@ from filings_rag.retrieve.scope import Scope, Scoper
 from filings_rag.route import facts as route_facts
 from filings_rag.route.plan import RoutePlan
 from filings_rag.route.router import Router
+from filings_rag.trace import NOOP, Tracer, compact
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -90,6 +94,7 @@ class AnswerContext:
     # Serving only: stop after the scope step when it found no company (level "corpus"), before
     # any embedding, rerank or model spend. Benchmark runs leave it off.
     refuse_unscoped: bool = False
+    tracer: Tracer = field(default=NOOP, compare=False)
 
     @classmethod
     def build(
@@ -156,10 +161,13 @@ def prepare(ctx: AnswerContext, question_id: str, question: str) -> Prepared:
     or `Unscoped` (only with `refuse_unscoped`); the fact step never raises (see
     `FactRoute.run`)."""
     start = time.monotonic()
+    t = ctx.tracer
     scope: Scope | None = None
     if ctx.scoper is not None:
         try:
-            scope = ctx.scoper.scope(question_id, question)
+            with t.observe("scope") as span:
+                scope = ctx.scoper.scope(question_id, question)
+                span.update(output=compact(scope.record), metadata={"documents": scope.documents})
         except UsagePaused:
             raise
         except Exception as e:
@@ -171,23 +179,30 @@ def prepare(ctx: AnswerContext, question_id: str, question: str) -> Prepared:
     facts_text = ""
     if ctx.router is not None:
         try:
-            plan, route_aux = ctx.router.route(question_id, question)
+            with t.observe("route") as span:
+                plan, route_aux = ctx.router.route(question_id, question)
+                span.update(output=plan.to_json(), metadata=route_aux)
         except UsagePaused:
             raise
         except Exception as e:
             raise StageError("route", e, scope) from e
         assert ctx.fact_route is not None
-        route, facts_text = ctx.fact_route.run(plan, scope)
-    try:
-        if ctx.decompose and scope is not None and len(scope.groups) > 1:
-            scope.record["decomposed"] = len(scope.groups)
-            retrieval = merge_retrievals(
-                [ctx.retriever.retrieve(question, g) for g in scope.groups],
-                ctx.k,
-                ctx.decompose_merge,
+        with t.observe("facts") as span:
+            route, facts_text = ctx.fact_route.run(plan, scope)
+            span.update(
+                output=compact({k: v for k, v in route.items() if k != "plan"}),
+                level="WARNING" if "facts_error" in route else None,
             )
-        else:
-            retrieval = ctx.retriever.retrieve(question, scope.documents if scope else None)
+    try:
+        with t.observe("retrieve", kind="retriever") as span:
+            retrieval = _retrieve(ctx, question, scope)
+            span.update(
+                output=[
+                    {"chunk_id": h.chunk_id, "doc": h.doc_name, "page": h.page, "score": h.score}
+                    for h in retrieval.hits
+                ],
+                metadata={"embed_tokens": retrieval.embed_tokens, **retrieval.aux},
+            )
     except Exception as e:
         raise StageError("retrieval", e, scope) from e
     return Prepared(
@@ -200,6 +215,17 @@ def prepare(ctx: AnswerContext, question_id: str, question: str) -> Prepared:
         route_aux,
         facts_text,
     )
+
+
+def _retrieve(ctx: AnswerContext, question: str, scope: Scope | None) -> Retrieval:
+    if ctx.decompose and scope is not None and len(scope.groups) > 1:
+        scope.record["decomposed"] = len(scope.groups)
+        return merge_retrievals(
+            [ctx.retriever.retrieve(question, g) for g in scope.groups],
+            ctx.k,
+            ctx.decompose_merge,
+        )
+    return ctx.retriever.retrieve(question, scope.documents if scope else None)
 
 
 def answer_one(

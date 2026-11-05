@@ -108,16 +108,17 @@ class Limits:
     def reserve(self, conn: psycopg.Connection[Any], qid: uuid.UUID, row: dict[str, Any]) -> None:
         """Insert the query's row as `reserved` at `reserve_usd`, or, over the cap, as
         `refused` at $0 and raise `Refused` (503). `row` holds the row's identifying columns
-        (question, config_hash, git_sha, ip_hash, tags). Commits."""
+        (question, config_hash, git_sha, ip_hash, tags; trace_id optional). Commits."""
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (_CAP_LOCK,))
             over = self.spent_today(conn) + self.reserve_usd > self.daily_cap_usd + 1e-9
             conn.execute(
                 "INSERT INTO served_queries (id, question, status, refusal, cost_usd,"
-                " config_hash, git_sha, ip_hash, tags)"
+                " config_hash, git_sha, ip_hash, tags, trace_id)"
                 " VALUES (%(id)s, %(question)s, %(status)s, %(refusal)s, %(cost)s,"
-                " %(config_hash)s, %(git_sha)s, %(ip_hash)s, %(tags)s)",
-                row
+                " %(config_hash)s, %(git_sha)s, %(ip_hash)s, %(tags)s, %(trace_id)s)",
+                {"trace_id": None}
+                | row
                 | {
                     "id": qid,
                     "status": "refused" if over else "reserved",

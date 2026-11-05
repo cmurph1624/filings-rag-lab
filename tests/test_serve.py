@@ -17,7 +17,7 @@ from filings_rag import db
 from filings_rag.backends.base import BackendError, Result
 from filings_rag.harness.answer import REPO_ROOT, AnswerContext
 from filings_rag.harness.prompts import get_prompt
-from filings_rag.pricing import Usage
+from filings_rag.pricing import Usage, model_cost
 from filings_rag.retrieve.base import Hit, Retrieval, RetrievalError
 from filings_rag.retrieve.scope import Scope
 from filings_rag.serve import citations
@@ -237,6 +237,7 @@ def test_ask_answers_cites_and_records(
     assert body["cost_usd"] == pytest.approx(rec["cost_usd"], abs=1e-6)
     assert [h["chunk_id"] for h in rec["retrieved"]] == [101, 102]
     assert "ZZ FY2022 revenue?" in backend.prompts[0]
+    assert rec["trace_id"] is None  # tracing is off without Langfuse keys
 
 
 @pytest.mark.db
@@ -515,3 +516,72 @@ def test_parallel_requests_from_one_client_cannot_overshoot_the_rate_limit(
     for t in threads:
         t.join()
     assert sorted(outcomes) == ["ok"] * 3 + ["rate_limited"] * 3
+
+
+# --- tracing ----------------------------------------------------------------------------------
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_an_answer_is_traced_and_its_rating_scores_the_trace(
+    conn: psycopg.Connection[Any], backend: Backend, tracer: Any
+) -> None:
+    with TestClient(create_app(lambda: service(backend, tracer=tracer))) as c:
+        qid = c.post("/ask", json={"question": "ZZ FY2022 revenue?"}).json()["query_id"]
+        assert c.post("/feedback", json={"query_id": qid, "rating": "down"}).status_code == 204
+    assert tracer.shut  # flushed when the app stops
+    (root,) = tracer.roots
+    assert root.fields["trace_id"] == uuid.UUID(qid).hex == row(conn, qid)["trace_id"]
+    assert root.fields["input"] == "ZZ FY2022 revenue?" and root.fields["tags"] == ["local"]
+    assert root.fields["metadata"]["config_hash"] == CONFIG_HASH
+    assert root.names() == ["retrieve", "generate"]
+    gen = root.find("generate")
+    assert gen.kind == "generation" and gen.fields["model"] == "claude-sonnet-5-5"
+    assert gen.fields["usage"]["input"] == 1000 and gen.fields["usage"]["output"] == 100
+    usage = Usage(input_tokens=1000, output_tokens=100)
+    assert gen.fields["cost"] == {"total": pytest.approx(model_cost("claude-sonnet-5-5", usage))}
+    assert gen.fields["output"].endswith("[1].")
+    assert root.fields["output"]["status"] == "answered"
+    assert root.fields["metadata"]["chunk_ids"] == [101, 102]
+    assert tracer.scores == [
+        {
+            "trace_id": uuid.UUID(qid).hex,
+            "name": "user-feedback",
+            "value": 0.0,
+            "comment": None,
+            "score_id": f"{uuid.UUID(qid).hex}-user-feedback",
+        }
+    ]
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_a_failed_generation_is_an_error_in_its_trace(
+    conn: psycopg.Connection[Any], backend: Backend, tracer: Any
+) -> None:
+    backend.fail = True
+    with TestClient(create_app(lambda: service(backend, tracer=tracer))) as c:
+        assert c.post("/ask", json={"question": "ZZ FY2022 revenue?"}).status_code == 502
+    root = tracer.roots[0]
+    assert isinstance(root.find("generate").error, BackendError)
+    assert root.fields["level"] == "ERROR" and root.fields["output"]["status"] == "error"
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_refusals_are_traced_without_a_generate_step(
+    conn: psycopg.Connection[Any], backend: Backend, tracer: Any
+) -> None:
+    ctx = AnswerContext(retriever=Retriever(), scoper=NoCompanyScoper(), refuse_unscoped=True)  # type: ignore[arg-type]
+    capped = Limits(daily_cap_usd=0.01)  # below one reservation: every question is refused
+    with TestClient(create_app(lambda: service(backend, ctx=ctx, tracer=tracer))) as c:
+        assert c.post("/ask", json={"question": "Capital of France?"}).status_code == 200
+    with TestClient(create_app(lambda: service(backend, limits=capped, tracer=tracer))) as c:
+        assert c.post("/ask", json={"question": "ZZ FY2022 revenue?"}).status_code == 503
+    coverage, cap = tracer.roots
+    assert coverage.names() == ["scope"]
+    assert coverage.fields["output"]["refusal"] == "out_of_coverage"
+    assert coverage.fields["output"]["cost_usd"] == 0
+    assert cap.names() == [] and cap.error is None  # a refusal, not an error
+    assert cap.fields["output"] == {"status": "refused", "refusal": "daily_cap"}
+    assert backend.prompts == []
