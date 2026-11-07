@@ -28,3 +28,40 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run pytest
+
+  # The serving image builds, resolves its files from the repo layout, runs as non-root, and
+  # the production stack's Compose file and Caddyfile parse. (amd64 here; the deploy builds
+  # arm64.)
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg GIT_SHA=${{ github.sha }} -t frl:ci .
+      - name: Paths and config inside the image
+        run: |
+          docker run --rm --entrypoint python frl:ci -c "
+          import os
+          from filings_rag import db, pricing
+          from filings_rag.harness.answer import REPO_ROOT
+          from filings_rag.serve import config
+          from filings_rag.serve.app import STATIC
+          assert os.getuid() != 0, 'runs as root'
+          assert os.environ['GIT_SHA'] == '${{ github.sha }}'
+          for p in [pricing.PRICES_PATH, db.MIGRATIONS_DIR, REPO_ROOT / 'corpus/companies.csv',
+                    REPO_ROOT / 'config/concepts.toml', STATIC / 'index.html']:
+              assert p.exists(), p
+          assert not (REPO_ROOT / '.env').exists() and not (REPO_ROOT / 'data').exists()
+          print(config.load(REPO_ROOT / 'configs/serve.toml').run.hash)
+          "
+      - name: Caddyfile and Compose file parse
+        working-directory: deploy
+        env:
+          FRL_IMAGE: frl:ci
+          FRL_ENV_FILE: /dev/null
+          POSTGRES_PASSWORD: x
+          FRL_HOST: example.com
+          FRL_TLS: internal
+        run: |
+          docker compose -f compose.prod.yaml config --quiet
+          docker run --rm -e FRL_HOST -e FRL_TLS -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile

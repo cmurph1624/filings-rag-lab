@@ -701,6 +701,9 @@ def serve_cmd(
         help="Proxies whose X-Forwarded-For is trusted for the client address (the rate"
         " limit's key); in production, the Caddy container's address",
     ),
+    access_log: bool = typer.Option(
+        False, help="Log each request with the client's address (off: raw IPs aren't kept)"
+    ),
 ) -> None:
     """Run the public app (FastAPI) over the serving config's pipeline.
 
@@ -720,7 +723,12 @@ def serve_cmd(
     app_ = create_app(lambda: Service.from_config(cfg, settings, sha))
     typer.echo(f"serving {cfg.base} ({cfg.run.hash}) with {cfg.run.generation} on {host}:{port}")
     uvicorn.run(
-        app_, host=host, port=port, proxy_headers=True, forwarded_allow_ips=forwarded_allow_ips
+        app_,
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips=forwarded_allow_ips,
+        access_log=access_log,
     )
 
 
