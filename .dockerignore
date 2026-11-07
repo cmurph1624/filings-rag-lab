@@ -1,0 +1,14 @@
+# Only what the image needs goes in; never data or secrets.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!config/
+!configs/
+!corpus/
+!migrations/
+**/__pycache__
+**/*.pyc
+.env
+.env.*

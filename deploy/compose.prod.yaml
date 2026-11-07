@@ -1,0 +1,110 @@
+# Production stack: Caddy (TLS, the only published ports) → api (frl serve) → db (Postgres +
+# pgvector, two databases: frl_index restored from the Nucbox's dump, frl_app the app's tables).
+#
+# Environment (an env file rendered from SSM on deploy; see deploy/README.md):
+#   FRL_IMAGE          the api image, e.g. <ecr>/frl:<sha>
+#   FRL_ENV_FILE       the api's secrets file (default /run/frl/env, on tmpfs)
+#   POSTGRES_PASSWORD  the db superuser's password (also inside the api's DATABASE_URLs)
+#   FRL_HOST, FRL_TLS, ACME_CA   see deploy/Caddyfile
+#   FRL_BIND, FRL_HTTP_PORT, FRL_HTTPS_PORT   where Caddy listens (default all addresses, 80/443)
+name: frl
+
+services:
+  db:
+    # Same image as the Nucbox (PostgreSQL 17.11, pgvector 0.8.7), by multi-arch digest, so
+    # its dumps restore here unchanged.
+    image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: frl
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: frl_index
+    # Sized for a 4 GB t4g.medium shared with the api. Scoped questions scan a few thousand
+    # vectors exactly, so the index mostly needs to stay in cache.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=20
+    shm_size: 1g
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks: [frl]
+    healthcheck:
+      # Over TCP: the entrypoint's temporary first-boot server listens on the socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U frl -d frl_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    image: ${FRL_IMAGE:?set FRL_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ${FRL_ENV_FILE:-/run/frl/env}
+    environment:
+      SERVE_TAG: ${SERVE_TAG:-prod}
+    # Trust X-Forwarded-For (the rate limit's key) only from Caddy's fixed address.
+    command:
+      - frl
+      - serve
+      - --config
+      - configs/serve.toml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --forwarded-allow-ips
+      - 172.30.57.10
+    mem_limit: 1g
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [frl]
+    # Not published: only Caddy reaches it. Health is the image's HEALTHCHECK (/version).
+
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    environment:
+      FRL_HOST: ${FRL_HOST:?set FRL_HOST}
+      FRL_TLS: ${FRL_TLS:?set FRL_TLS to an email, or internal}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    ports:
+      - "${FRL_BIND:-0.0.0.0}:${FRL_HTTP_PORT:-80}:80"
+      - "${FRL_BIND:-0.0.0.0}:${FRL_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates and ACME account: keep, or hit Let's Encrypt limits
+      - caddy_config:/config
+    mem_limit: 128m
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      frl:
+        ipv4_address: 172.30.57.10
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+networks:
+  frl:
+    ipam:
+      config:
+        - subnet: 172.30.57.0/24
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

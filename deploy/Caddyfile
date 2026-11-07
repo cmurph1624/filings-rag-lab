@@ -1,0 +1,69 @@
+# TLS in front of the API. Environment (from compose.prod.yaml):
+#   FRL_HOST  the public name, e.g. filings.stigmergylabs.net (localhost for a rehearsal)
+#   FRL_TLS   an email for Let's Encrypt, or "internal" for Caddy's own CA (rehearsals)
+#   ACME_CA   the ACME directory; set Let's Encrypt staging until DNS and limits are proven
+{
+	# Caddy's own log (errors, certificates) without client addresses either: a proxy error
+	# carries the request, and http.stdlib's "TLS handshake error from <ip>" lines are dropped.
+	log default {
+		output stdout
+		exclude http.stdlib
+		format filter {
+			wrap json
+			fields {
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>headers delete
+			}
+		}
+	}
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+{$FRL_HOST} {
+	tls {$FRL_TLS}
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		-Server
+	}
+
+	# Questions are at most 500 characters; nothing legitimate is bigger than this.
+	request_body {
+		max_size 4KB
+	}
+
+	# Caddy replaces any client-sent X-Forwarded-For with the client's address, and the API
+	# trusts that header only from this container's fixed address (compose.prod.yaml).
+	reverse_proxy api:8000 {
+		transport http {
+			response_header_timeout 120s
+		}
+	}
+
+	# Access log without client addresses or headers: raw IPs are never stored.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>headers delete
+			}
+		}
+	}
+}
