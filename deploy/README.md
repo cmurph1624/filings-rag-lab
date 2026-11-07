@@ -52,6 +52,9 @@ Never run `down -v` here. It deletes `frl_app` and Caddy's certificates.
 ## Privacy
 
 Neither the API nor Caddy logs client addresses:
-- Caddy's access log drops them.
+- Caddy's access log and its own log (errors, certificates) drop them, and its TLS-handshake-error lines are excluded.
 - uvicorn's access log is off.
 - The rate limit stores a salted hash.
+
+To check: stop the api, request the site, then search the logs for the client's address. It shouldn't appear:
+`docker compose logs caddy api | grep <client ip>`.

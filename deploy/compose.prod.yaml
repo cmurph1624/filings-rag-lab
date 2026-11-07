@@ -39,7 +39,8 @@ services:
       - ./initdb:/docker-entrypoint-initdb.d:ro
     networks: [frl]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U frl -d frl_app"]
+      # Over TCP: the entrypoint's temporary first-boot server listens on the socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U frl -d frl_app"]
       interval: 5s
       timeout: 3s
       retries: 20
