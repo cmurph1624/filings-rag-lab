@@ -27,7 +27,7 @@ the repo, the image or Terraform state.
 ## api env file
 
 ```
-DATABASE_URL=postgresql://frl:<pw>@db:5432/frl_index
+DATABASE_URL=postgresql://frl_reader:<reader pw>@db:5432/frl_index   # read-only; made by restore_index.sh
 APP_DATABASE_URL=postgresql://frl:<pw>@db:5432/frl_app
 ANTHROPIC_API_KEY=...
 VOYAGE_API_KEY=...
@@ -39,13 +39,39 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 
 ## Commands
 
+The api reads `frl_index` at startup, so on a new host the index is restored before the api
+first starts:
+
 ```sh
 C="docker compose --env-file stack.env -f compose.prod.yaml"
 $C up -d db --wait
 # Migrate the app database (the index database comes migrated in its dump).
 $C run --rm --no-deps -e DATABASE_URL="$APP_DATABASE_URL" api frl db migrate
+COMPOSE="$C" FRL_READER_PASSWORD=... ./restore_index.sh s3://<bucket>/serving/structured@1/<x>.dump
 $C up -d --wait
 ```
+
+## The index
+
+`scripts/serving_dump.sh structured@1 [--upload s3://<bucket>]` runs on the Nucbox. It dumps
+only the tables serving reads:
+- the pipeline's chunks
+- `documents`, `corpora` and `corpus_documents`
+- `benchmark_docs` and `xbrl_facts`
+- `pipelines` and `schema_migrations`
+
+It writes about 600 MB with a manifest of row counts, sha256, migration level and versions.
+
+`restore_index.sh` restores into `frl_index_new`, without the HNSW and full-text indexes,
+because serving scans a scope's chunks exactly. It checks the manifest, grants `frl_reader`,
+then swaps the database names during a brief api stop. The previous index stays as
+`frl_index_old` until the next restore.
+
+Rehearsed on the Nucbox (2026-11-07):
+- **Speed:** a 572 MB dump restored in 38–40 s, with about 8 s of api downtime for the swap. `frl_index` is 1.2 GB.
+- **Retrieval:** identical to the source database on all 150 open-subset questions, reading as `frl_reader`. Scope, route and facts were identical too.
+
+Rollback: stop the api, rename `frl_index` → `frl_index_bad` and `frl_index_old` → `frl_index`, then start the api.
 
 Never run `down -v` here. It deletes `frl_app` and Caddy's certificates.
 
