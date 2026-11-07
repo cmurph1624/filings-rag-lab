@@ -36,6 +36,8 @@ resource "aws_s3_bucket_public_access_block" "data" {
 
 resource "aws_s3_bucket_policy" "data" {
   bucket = aws_s3_bucket.data.id
+  # S3 can refuse the two at once on a new bucket (OperationAborted).
+  depends_on = [aws_s3_bucket_public_access_block.data]
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{

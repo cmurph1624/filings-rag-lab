@@ -80,6 +80,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
 
 resource "aws_s3_bucket_policy" "state" {
   bucket = aws_s3_bucket.state.id
+  # S3 can refuse the two at once on a new bucket (OperationAborted).
+  depends_on = [aws_s3_bucket_public_access_block.state]
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
