@@ -55,12 +55,13 @@ server="$(val postgres 'SHOW server_version')"
 phase=restore
 
 rollback() {  # the api is unhealthy on the new index: back to the previous one
+  # Explicit returns: set -e doesn't apply inside a function called from `rollback || ...`.
   has_db frl_index_old || { echo "no frl_index_old to roll back to" >&2; return 1; }
-  $COMPOSE stop api
-  psql_ -d postgres -c "DROP DATABASE IF EXISTS frl_index_bad"
+  $COMPOSE stop api || return 1
+  psql_ -d postgres -c "DROP DATABASE IF EXISTS frl_index_bad" || return 1
   psql_ -1 -d postgres -c "ALTER DATABASE frl_index RENAME TO frl_index_bad" \
-    -c "ALTER DATABASE frl_index_old RENAME TO frl_index"
-  $COMPOSE up -d --wait api
+    -c "ALTER DATABASE frl_index_old RENAME TO frl_index" || return 1
+  $COMPOSE up -d --wait api || return 1
   echo "rolled back to the previous index; the new one is frl_index_bad" >&2
 }
 
