@@ -12,6 +12,8 @@
 # scope, so the restore leaves out the HNSW and full-text indexes (they're in the dump).
 #
 # pg_dump runs in the same pinned image as the databases (PG_IMAGE), so its version matches.
+# Run it while nothing writes to these tables (no ingest or fact load): the row counts are
+# taken before and after the dump, and the script stops if they differ.
 set -euo pipefail
 
 PG_IMAGE="${PG_IMAGE:-pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d}"
@@ -51,18 +53,23 @@ base="$stamp-${sha:0:12}"
 args=()
 for t in "${tables[@]}"; do args+=(-t "public.$t"); done
 
+# Row counts, so the restore can check it got everything.
+row_counts() {
+  local c="{"
+  for t in "${tables[@]}"; do c+="\"$t\": $(sqlval "SELECT count(*) FROM public.\"$t\""),"; done
+  echo "${c%,}}"
+}
+counts="$(row_counts)"
+
 echo "dumping ${tables[*]} → $out/$base.dump"
 start=$(date +%s)
 pg pg_dump "$DATABASE_URL" -Fc -Z 6 --no-owner --no-privileges "${args[@]}" -f "/out/$base.dump"
 echo "dumped in $(( $(date +%s) - start )) s"
-
-# Row counts, so the restore can check it got everything.
-counts="{"
-for t in "${tables[@]}"; do
-  n="$(sqlval "SELECT count(*) FROM public.\"$t\"")"
-  counts+="\"$t\": $n,"
-done
-counts="${counts%,}}"
+if [[ "$(row_counts)" != "$counts" ]]; then
+  rm -f "$out/$base.dump"
+  echo "rows changed during the dump (a write is running?); dump discarded, try again" >&2
+  exit 1
+fi
 
 python3 - "$out/$base" "$ref" "$table" "$sha" "$stamp" "$counts" \
   "$(sqlval "SELECT max(name) FROM schema_migrations")" \

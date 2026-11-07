@@ -71,7 +71,25 @@ Rehearsed on the Nucbox (2026-11-07):
 - **Speed:** a 572 MB dump restored in 38–40 s, with about 8 s of api downtime for the swap. `frl_index` is 1.2 GB.
 - **Retrieval:** identical to the source database on all 150 open-subset questions, reading as `frl_reader`. Scope, route and facts were identical too.
 
-Rollback: stop the api, rename `frl_index` → `frl_index_bad` and `frl_index_old` → `frl_index`, then start the api.
+On failure, `restore_index.sh` cleans up after itself:
+- **Before the swap:** it drops `frl_index_new`. The live index is untouched.
+- **During the swap:** it puts the old name back and restarts the api.
+- **Unhealthy after the swap:** it rolls back by itself.
+
+### Rollback
+
+The previous index is kept as `frl_index_old`, so rolling back by hand is a rename:
+
+```sh
+$C stop api
+$C exec -T db psql -U frl -d postgres -c "DROP DATABASE IF EXISTS frl_index_bad"
+$C exec -T db psql -U frl -d postgres -1 \
+  -c "ALTER DATABASE frl_index RENAME TO frl_index_bad" \
+  -c "ALTER DATABASE frl_index_old RENAME TO frl_index"
+$C up -d --wait api
+```
+
+The next restore drops `frl_index_bad`.
 
 Never run `down -v` here. It deletes `frl_app` and Caddy's certificates.
 
