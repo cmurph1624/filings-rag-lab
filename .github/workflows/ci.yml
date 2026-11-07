@@ -65,3 +65,19 @@ jobs:
           docker compose -f compose.prod.yaml config --quiet
           docker run --rm -e FRL_HOST -e FRL_TLS -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile
+
+  # Terraform parses and is formatted. No AWS credentials: init without the backend.
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.9
+      - run: terraform fmt -recursive -check -diff infra
+      - name: validate
+        run: |
+          for d in infra/bootstrap infra/prod; do
+            terraform -chdir="$d" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$d" validate
+          done
