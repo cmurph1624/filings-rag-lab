@@ -23,5 +23,7 @@ __pycache__/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+*.tfplan
+tfplan
 
 .DS_Store
