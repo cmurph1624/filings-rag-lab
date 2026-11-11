@@ -41,13 +41,13 @@ synthetic question sets kept apart from the headline, are also in. See
 
 ## Reproduce
 
-Setup is in `CLAUDE.md`. Secrets in `.env` are 1Password `op://` references, so start the
-database with `op run --env-file=.env -- docker compose up -d` and prefix commands that need
-keys or the database the same way (`op run --env-file=.env -- uv run frl ...`). Then:
+Setup is in `CLAUDE.md`. If your `.env` holds 1Password `op://` references (as it does on the
+Nucbox), run each command below as `op run --env-file=.env -- <command>`, or the whole block at once
+with `op run --env-file=.env -- sh -c '...'`. With plain values in `.env`, run them as shown. Then:
 
 ```
-op run --env-file=.env -- uv run frl bench pull && op run --env-file=.env -- uv run frl corpus fetch  # FinanceBench open subset + EDGAR filings
-op run --env-file=.env -- uv run frl ingest build naive-fixed@1 && op run --env-file=.env -- uv run frl ingest label naive-fixed@1
-op run --env-file=.env -- uv run frl run configs/p0-naive.toml        # prints the run id
-op run --env-file=.env -- uv run frl judge <run-id> && op run --env-file=.env -- uv run frl report <run-id>
+uv run frl bench pull && uv run frl corpus fetch  # FinanceBench open subset + EDGAR filings
+uv run frl ingest build naive-fixed@1 && uv run frl ingest label naive-fixed@1
+uv run frl run configs/p0-naive.toml        # prints the run id
+uv run frl judge <run-id> && uv run frl report <run-id>
 ```
