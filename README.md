@@ -41,7 +41,9 @@ synthetic question sets kept apart from the headline, are also in. See
 
 ## Reproduce
 
-Setup is in `CLAUDE.md`. Then:
+Setup is in `CLAUDE.md`. If your `.env` holds 1Password `op://` references (as it does on the
+Nucbox), run each command below as `op run --env-file=.env -- <command>`, or the whole block at once
+with `op run --env-file=.env -- sh -c '...'`. With plain values in `.env`, run them as shown. Then:
 
 ```
 uv run frl bench pull && uv run frl corpus fetch  # FinanceBench open subset + EDGAR filings
