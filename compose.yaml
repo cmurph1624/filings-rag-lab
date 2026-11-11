@@ -4,7 +4,7 @@ services:
     container_name: filings-rag-db
     environment:
       POSTGRES_USER: frl
-      POSTGRES_PASSWORD: frl
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?run through: op run --env-file=.env -- docker compose ...}"
       POSTGRES_DB: frl
     # Loopback only. 5432, 5433 and 55432 are taken by other projects on the Nucbox.
     ports:
