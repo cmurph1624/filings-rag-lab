@@ -44,7 +44,7 @@ FRL_STATE="$next" "$HERE/render_env.sh"
 say "starting the db; migrating frl_app"
 dc up -d --wait db
 app_url="$(grep '^APP_DATABASE_URL=' /run/frl/env | cut -d= -f2-)"
-dc run --rm --no-deps -e DATABASE_URL="$app_url" api frl db migrate
+dc run --rm -T --no-deps -e DATABASE_URL="$app_url" api frl db migrate
 
 indexed="$(dc exec -T db psql -X -U frl -d frl_index -Atc \
   "SELECT to_regclass('public.pipelines') IS NOT NULL")"
