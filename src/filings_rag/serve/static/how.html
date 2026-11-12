@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · Filings RAG Lab</title>
+<meta name="description" content="The retrieval pipeline, evaluation and infrastructure behind Filings RAG Lab.">
+<link rel="stylesheet" href="/site.css">
+<style>
+  main { gap: 72px; }
+  .stat { flex: 1 1 200px; display: flex; flex-direction: column; gap: 4px; }
+  .stat b { font: 600 38px/1.1 var(--serif); font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 15px; font-weight: 600; }
+  .stat small { font-size: 13px; color: var(--muted); }
+
+  .flow { display: flex; flex-direction: column; gap: 14px; padding: 28px; }
+  .chain { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .node { padding: 12px 16px; border: 1px solid var(--line-strong); border-radius: 10px;
+    display: flex; flex-direction: column; }
+  .node b { font-weight: 600; }
+  .node small { font-size: 13px; color: var(--muted); }
+  .node.end { background: var(--bg); }
+  .arrow { stroke: var(--muted); flex: 0 0 auto; }
+  .paths { display: flex; flex-wrap: wrap; gap: 14px; }
+  .path { flex: 1 1 380px; padding: 18px; border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .path .k { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .path p { font-size: 14px; color: var(--body); }
+  .path.fact { background: var(--fact-soft); border: 1px solid var(--fact-line); }
+  .path.fact .k { color: var(--fact); }
+  .path.prose { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); }
+  .path.prose .k { color: var(--accent); }
+  .services { display: flex; flex-wrap: wrap; gap: 10px; font-size: 14px; }
+  .services span { padding: 8px 12px; border-radius: 8px; background: var(--bg); }
+
+  dl { margin: 0; border-top: 1px solid var(--line); }
+  dl > div { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  dt { flex: 0 0 180px; font-weight: 600; }
+  dd { flex: 1 1 420px; margin: 0; color: var(--body); font-size: 15px; }
+
+  .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+  table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 15px; }
+  th { text-align: left; color: var(--muted); font-size: 13px; text-transform: uppercase;
+    letter-spacing: .04em; font-weight: 600; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  td { padding: 14px 18px; border-bottom: 1px solid var(--line); color: var(--body); }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 600; color: var(--fg); white-space: nowrap; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; color: var(--fg); }
+
+  .bars { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .bar { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+  .bar > span:first-child { flex: 0 0 150px; }
+  .bar .track { flex: 1 1 auto; height: 10px; background: var(--soft); border-radius: 5px; overflow: hidden; }
+  .bar .track i { display: block; height: 10px; background: var(--accent); border-radius: 5px; }
+  .bar > span:last-child { flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .card ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+  .card ul li { font-size: 14px; }
+  .ops .card { flex: 1 1 220px; }
+  .ops .card p { font-size: 14px; }
+  footer { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+  code { font-family: var(--mono); font-size: .92em; }
+  @media (max-width: 640px) {
+    .flow { padding: 18px; }
+    .chain { flex-direction: column; align-items: flex-start; }
+    .arrow { transform: rotate(90deg); margin-left: 12px; }
+  }
+</style>
+</head>
+<body>
+<header class="top"><div>
+  <a class="brand" href="/">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke-width="1.8" aria-hidden="true"><rect x="5" y="3" width="15" height="20" rx="2"/><path d="M9 9h7M9 13h7M9 17h4"/><circle cx="20" cy="20" r="4.5"/><path d="M23.3 23.3l2.7 2.7"/></svg>
+    Filings RAG Lab</a>
+  <nav aria-label="Main"><a href="/">Ask</a><a href="/how" aria-current="page">How it works</a></nav>
+</div></header>
+
+<main>
+  <section class="intro">
+    <p class="eyebrow" style="color:var(--accent)">Under the hood</p>
+    <h1 class="display">A retrieval pipeline you can measure</h1>
+    <p class="lede">Retrieval-augmented generation over SEC EDGAR filings, scored against the
+      FinanceBench open subset (150 questions). Every change was a recorded experiment: pipeline,
+      retriever, model and judge, with tokens and cost. This site runs the best configuration, run
+      846, with the answer model on the Anthropic API.</p>
+  </section>
+
+  <section class="cards" aria-label="Headline numbers">
+    <div class="card stat"><b>87.3%</b><span>Accuracy</span><small>131 of 150, FinanceBench open subset</small></div>
+    <div class="card stat"><b>98.4%</b><span>Fact questions</span><small>62 of 63, answered from XBRL</small></div>
+    <div class="card stat"><b>$0.024</b><span>Per correct answer</span><small>API list price, run 846</small></div>
+    <div class="card stat"><b>104,794</b><span>Chunks searched</span><small>367 filings, 32 companies</small></div>
+  </section>
+
+  <section class="stack" aria-labelledby="pipe" style="gap:24px">
+    <h2 id="pipe" class="h2">The answer pipeline</h2>
+    <figure class="card flow" style="margin:0" aria-label="Question, scope, route, then a fact path and a prose path, then generate, then answer with citations">
+      <div class="chain">
+        <div class="node end"><b>Question</b></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>Scope</b><small>company + fiscal period</small></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>Route</b><small>fact, prose or both</small></div>
+      </div>
+      <div class="paths">
+        <div class="path fact"><span class="k">Fact path</span><b>XBRL facts → metrics in SQL</b>
+          <p>SEC companyfacts, as filed. A metrics library computes margins, ratios and changes
+            deterministically, so the model never does arithmetic. Cited as [F1], [F2]…</p></div>
+        <div class="path prose"><span class="k">Prose path</span><b>Scoped vector search → rerank</b>
+          <p>pgvector over <code>voyage-finance-2</code> embeddings, filtered to the scoped filings;
+            50 candidates reranked by Voyage <code>rerank-3</code> to the top 10. Cited as [1], [2]…</p></div>
+      </div>
+      <div class="chain">
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>Generate</b><small>Claude Sonnet 5.5, prompt <code>answer@4</code></small></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node end"><b>Answer + citations</b><small>EDGAR links with page and section</small></div>
+      </div>
+    </figure>
+    <dl>
+      <div><dt>Scope</dt><dd>Rules match the company (names, aliases, tickers) and fiscal period, using
+        FinanceBench's period labels and a one-year lookback for forecasts. No company found means a
+        polite refusal and no model call.</dd></div>
+      <div><dt>Route</dt><dd>A rules router decides whether a question needs computed facts, retrieved
+        prose, or both. Fact questions get a Facts section ahead of the excerpts.</dd></div>
+      <div><dt>Chunking</dt><dd><code>structured@1</code>: table-preserving chunks, each prefixed with a
+        header line naming the company, form, period, Item and heading, so a table of numbers still
+        embeds near a question asked in words.</dd></div>
+      <div><dt>Retrieve</dt><dd>An exact scan over only the scoped filings (hundreds to a few thousand
+        vectors), top 50 by cosine similarity, then Voyage <code>rerank-3</code> keeps 10. Hybrid BM25
+        was tried and didn't help.</dd></div>
+      <div><dt>Generate</dt><dd>Claude Sonnet 5.5 with <code>answer@4</code>: answer only from the Facts
+        and Excerpts, cite each one, and say so when the evidence is missing.</dd></div>
+    </dl>
+  </section>
+
+  <section class="stack" aria-labelledby="res" style="gap:20px">
+    <div class="intro" style="gap:8px">
+      <h2 id="res" class="h2">How it got to 87.3%</h2>
+      <p style="color:var(--body)">FinanceBench open subset, 150 questions; these are not full-set
+        results. Answers are judged by Claude Opus 5.5 against a pinned rubric. The corpus is the 84
+        filings the questions cite plus 283 distractor filings from the same companies.</p>
+    </div>
+    <div class="table">
+      <table>
+        <thead><tr><th>Phase</th><th>What changed</th><th class="num" style="color:var(--muted)">Accuracy</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>Fixed-size chunks, vector top-10 (question filings only)</td><td class="num">66.7%</td></tr>
+          <tr><td>P1</td><td>Added 283 distractor filings: the same baseline drops</td><td class="num">60.7%</td></tr>
+          <tr><td>P1</td><td>Company/period scoping, Voyage reranker, structured chunks</td><td class="num">80.7%</td></tr>
+          <tr><td>P2</td><td>Rules router + XBRL facts for fact questions</td><td class="num">87.3%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cards">
+      <div class="card grow">
+        <h3>Swapping the answer model</h3>
+        <p style="font-size:14px">Same retrieval (run 846's pipeline). The model moves accuracy by at
+          most 7 questions.</p>
+        <div class="bars" role="img" aria-label="Accuracy by answer model: Sonnet 5.5 87.3%, Haiku 5.5 84.0%, Opus 5.5 84.0%, Qwen3.6-27B 4-bit 82.7%">
+          <div class="bar"><span>Claude Sonnet 5.5</span><span class="track"><i style="width:87.3%"></i></span><span>87.3%</span></div>
+          <div class="bar"><span>Claude Haiku 5.5</span><span class="track"><i style="width:84%"></i></span><span>84.0%</span></div>
+          <div class="bar"><span>Claude Opus 5.5</span><span class="track"><i style="width:84%"></i></span><span>84.0%</span></div>
+          <div class="bar"><span>Qwen3.6-27B (4-bit)</span><span class="track"><i style="width:82.7%"></i></span><span>82.7%</span></div>
+        </div>
+      </div>
+      <div class="card grow">
+        <h3>Evals as infrastructure</h3>
+        <ul>
+          <li>Re-running the best config moves accuracy by about one question, so CI gates on
+            retrieval (recall@10, MRR), which embedding and rerank caches make exact.</li>
+          <li>The gate blocked a deliberately bad chunker: recall@10 0.833 → 0.584.</li>
+          <li>Fiscal-period and faithfulness metrics; two synthetic question sets kept apart from the
+            headline.</li>
+          <li>A thumbs-down on this site can become a case in a separate <code>prod-feedback@1</code>
+            set that a run reproduces.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="stack" aria-labelledby="infra" style="gap:20px">
+    <h2 id="infra" class="h2">Where it runs</h2>
+    <figure class="card flow" style="margin:0" aria-label="Browser to Caddy to FastAPI to Postgres with pgvector">
+      <span class="eyebrow" style="font-size:13px">AWS us-east-2 · one EC2 t4g.medium (arm64) · Docker Compose</span>
+      <div class="chain">
+        <div class="node end"><b>Browser</b></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>Caddy</b><small>TLS, Let's Encrypt</small></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>FastAPI</b><small>/ask, /feedback, guardrails</small></div>
+        <svg class="arrow" width="28" height="14" viewBox="0 0 28 14" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M1 7h24M19 2l6 5-6 5"/></svg>
+        <div class="node"><b>Postgres + pgvector</b><small>index (restored) · app data (backed up)</small></div>
+      </div>
+      <div class="services">
+        <span>Anthropic API: answers</span>
+        <span>Voyage: query embedding, rerank</span>
+        <span>Langfuse: one trace per question</span>
+      </div>
+    </figure>
+    <div class="cards ops">
+      <div class="card"><h3>Guardrails</h3><p>10 questions per visitor per hour, a $3/day spend cap
+        (reserve, then settle), 500-character questions, 3 at a time.</p></div>
+      <div class="card"><h3>Privacy</h3><p>Visitor addresses are salted and hashed for rate limiting;
+        raw IPs are never stored or logged.</p></div>
+      <div class="card"><h3>Deploys</h3><p>Terraform for everything. GitHub Actions builds an arm64
+        image to ECR over OIDC and deploys by commit SHA through SSM; no SSH port.</p></div>
+      <div class="card"><h3>Recovery</h3><p>Daily backups of app data to S3 with a tested restore
+        drill; CloudWatch alarms recover or reboot the instance.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Results are on the FinanceBench open subset (150 questions) only.</span>
+    <span id="build"></span>
+  </footer>
+</main>
+<script>
+fetch("/version").then((r) => r.ok ? r.json() : null).then((v) => {
+  if (!v) return;
+  const el = document.getElementById("build");
+  el.textContent = `${v.model} · build `;
+  const code = document.createElement("code");
+  code.textContent = String(v.sha).slice(0, 7);
+  el.append(code);
+}).catch(() => {});
+</script>
+</body>
+</html>

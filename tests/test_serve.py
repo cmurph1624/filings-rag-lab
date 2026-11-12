@@ -2,6 +2,7 @@
 
 import datetime as dt
 import os
+import re
 import threading
 import tomllib
 import uuid
@@ -23,9 +24,9 @@ from filings_rag.retrieve.scope import Scope
 from filings_rag.serve import citations
 from filings_rag.serve import config as serve_config
 from filings_rag.serve import service as service_mod
-from filings_rag.serve.app import create_app
+from filings_rag.serve.app import COMPANIES_SLOT, STATIC, create_app, index_page
 from filings_rag.serve.limits import Limits, Refused, ip_hash, seconds_to_utc_midnight
-from filings_rag.serve.service import PUBLIC_ERROR, Service
+from filings_rag.serve.service import PUBLIC_ERROR, Service, read_companies
 
 # --- config -----------------------------------------------------------------------------------
 
@@ -301,6 +302,11 @@ def test_health_version_and_page(client: TestClient, monkeypatch: pytest.MonkeyP
     }
     page = client.get("/")
     assert page.status_code == 200 and "Filings RAG Lab" in page.text
+    assert "<!-- companies -->" not in page.text
+    how = client.get("/how")
+    assert how.status_code == 200 and "A retrieval pipeline you can measure" in how.text
+    css = client.get("/site.css")
+    assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
 
 
 class FailingRetriever:
@@ -621,3 +627,21 @@ def test_a_lost_index_connection_fails_health_and_restarts_once(
         assert r.status_code == 503 and r.json()["ok"] is False
         c.get("/version")
         assert lost == [1]  # once, not per request
+
+
+def test_the_ask_page_lists_the_companies_escaped_and_sorted() -> None:
+    page = index_page(["b & Co", "Alpha", "AMD"])
+    assert "<li>Alpha</li><li>AMD</li><li>b &amp; Co</li>" in page
+    assert COMPANIES_SLOT not in page
+
+
+def test_the_pages_match_the_coverage_they_claim() -> None:
+    """The copy says "32 companies"; the suggestions must name companies that are covered."""
+    companies = read_companies(REPO_ROOT / "corpus" / "companies.csv")
+    page = (STATIC / "index.html").read_text()
+    assert f"{len(companies)} companies" in page
+    assert f"{len(companies)} companies" in (STATIC / "how.html").read_text()
+    whos = re.findall(r'<span class="who">([^<]+) · ', page)
+    assert len(whos) == 5 and set(whos) <= set(companies)
+    for name in ("site.css", "how.html"):
+        assert (STATIC / name).is_file()

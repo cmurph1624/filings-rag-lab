@@ -1,10 +1,11 @@
-"""FastAPI app: `/ask`, `/feedback`, `/healthz`, `/version` and a static page.
+"""FastAPI app: `/ask`, `/feedback`, `/healthz`, `/version` and two static pages (`/`, `/how`).
 
 Handlers are plain functions, so FastAPI runs them in its threadpool; the Service serializes
 what must be serialized. `create_app` takes a factory so tests can build the Service from fakes;
 `frl serve` builds it from `configs/serve.toml`.
 """
 
+import html
 import logging
 import os
 import signal
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from filings_rag.serve.limits import Refused
@@ -24,6 +25,13 @@ from filings_rag.serve.service import QuestionTooLong, Service
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
+COMPANIES_SLOT = "<!-- companies -->"
+
+
+def index_page(companies: list[str]) -> str:
+    """The ask page with the covered companies filled in from `corpus/companies.csv`."""
+    items = "".join(f"<li>{html.escape(c)}</li>" for c in sorted(companies, key=str.casefold))
+    return (STATIC / "index.html").read_text().replace(COMPANIES_SLOT, items)
 
 
 def exit_soon() -> None:
@@ -73,8 +81,16 @@ def create_app(
         return svc
 
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html")
+    def index(request: Request) -> HTMLResponse:
+        return HTMLResponse(index_page(service(request).companies))
+
+    @app.get("/how", include_in_schema=False)
+    def how() -> FileResponse:
+        return FileResponse(STATIC / "how.html")
+
+    @app.get("/site.css", include_in_schema=False)
+    def site_css() -> FileResponse:
+        return FileResponse(STATIC / "site.css", media_type="text/css")
 
     @app.post("/ask")
     def ask(body: AskBody, request: Request) -> JSONResponse:
