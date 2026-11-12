@@ -317,6 +317,11 @@ def test_health_version_and_page(client: TestClient, monkeypatch: pytest.MonkeyP
         icon = client.get(path)
         assert icon.status_code == 200 and icon.headers["content-type"] == kind
         assert path in page.text and path in how.text
+    # The handlers take no parameters, so the query string cannot pick another file.
+    for name in ("site.css", "/etc/hostname", "../app.py"):
+        icon = client.get("/favicon.svg", params={"name": name, "media_type": "text/html"})
+        assert icon.headers["content-type"] == "image/svg+xml"
+        assert icon.content == (STATIC / "favicon.svg").read_bytes()
 
 
 class FailingRetriever:
