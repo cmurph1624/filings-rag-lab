@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Langfuse tracing for the serving app; off unless both keys are set.
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_host: str = "https://us.cloud.langfuse.com"  # the project is in the US region
 
     @property
     def app_db(self) -> str:
