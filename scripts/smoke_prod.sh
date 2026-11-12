@@ -4,7 +4,7 @@
 #   AWS_PROFILE=frl-admin scripts/smoke_prod.sh [expected-sha] [-k]
 #
 # Checks /healthz, /version (against expected-sha, if given), one answered open-subset question
-# with a cited excerpt, one out-of-coverage refusal at $0, and a feedback round trip. The
+# with the gold figure and a citation (excerpt or fact), one out-of-coverage refusal at $0, and a feedback round trip. The
 # questions carry the smoke token (from SSM), so they're tagged "smoke" and kept out of the
 # stats. Costs about $0.02. -k accepts a Let's Encrypt staging certificate.
 set -euo pipefail
@@ -37,8 +37,11 @@ v="$(get /version)"
 echo "ok   version $(jq -r '.sha[0:12] + " " + .pipeline + " " + .model' <<<"$v")"
 
 a="$(ask "What is the FY2018 capital expenditure amount (in USD millions) for 3M?")"
-jq -e '.status == "answered" and (.answer | length) > 0 and any(.excerpts[]; .cited)' \
-  <<<"$a" >/dev/null || fail "answer: $(jq -c '{status, refusal, error}' <<<"$a")"
+# Gold: $1,577M (FinanceBench). The router sends it to the XBRL facts, so the citation may be
+# a fact [F1] rather than an excerpt [n]: either counts.
+jq -e '.status == "answered" and (.answer | test("1,?577"))
+       and (any(.excerpts[]; .cited) or (.facts | length) > 0)' \
+  <<<"$a" >/dev/null || fail "answer: $(jq -c '{status, refusal, error, answer: .answer[0:200]}' <<<"$a")"
 echo "ok   answered in $(jq -r .latency_s <<<"$a") s for \$$(jq -r .cost_usd <<<"$a"): $(jq -r '.answer[0:100]' <<<"$a")…"
 qid="$(jq -r .query_id <<<"$a")"
 
