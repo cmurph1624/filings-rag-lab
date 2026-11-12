@@ -26,6 +26,12 @@ from filings_rag.serve.service import QuestionTooLong, Service
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
 COMPANIES_SLOT = "<!-- companies -->"
+# The tab icon is the header logo; browsers ask for /favicon.ico on their own.
+ICONS = {
+    "favicon.svg": "image/svg+xml",
+    "favicon.ico": "image/x-icon",
+    "apple-touch-icon.png": "image/png",
+}
 
 
 def index_page(companies: list[str]) -> str:
@@ -95,6 +101,15 @@ def create_app(
     @app.get("/markdown.js", include_in_schema=False)
     def markdown_js() -> FileResponse:
         return FileResponse(STATIC / "markdown.js", media_type="text/javascript")
+
+    for name, media_type in ICONS.items():
+        app.add_api_route(
+            f"/{name}",
+            lambda name=name, media_type=media_type: FileResponse(
+                STATIC / name, media_type=media_type
+            ),
+            include_in_schema=False,
+        )
 
     @app.post("/ask")
     def ask(body: AskBody, request: Request) -> JSONResponse:

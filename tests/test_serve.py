@@ -24,7 +24,7 @@ from filings_rag.retrieve.scope import Scope
 from filings_rag.serve import citations
 from filings_rag.serve import config as serve_config
 from filings_rag.serve import service as service_mod
-from filings_rag.serve.app import COMPANIES_SLOT, STATIC, create_app, index_page
+from filings_rag.serve.app import COMPANIES_SLOT, ICONS, STATIC, create_app, index_page
 from filings_rag.serve.limits import Limits, Refused, ip_hash, seconds_to_utc_midnight
 from filings_rag.serve.service import PUBLIC_ERROR, Service, read_companies
 
@@ -309,6 +309,14 @@ def test_health_version_and_page(client: TestClient, monkeypatch: pytest.MonkeyP
     assert js.status_code == 200 and "renderAnswer" in js.text
     css = client.get("/site.css")
     assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
+    for path, kind in (
+        ("/favicon.svg", "image/svg+xml"),
+        ("/favicon.ico", "image/x-icon"),
+        ("/apple-touch-icon.png", "image/png"),
+    ):
+        icon = client.get(path)
+        assert icon.status_code == 200 and icon.headers["content-type"] == kind
+        assert path in page.text and path in how.text
 
 
 class FailingRetriever:
@@ -645,5 +653,5 @@ def test_the_pages_match_the_coverage_they_claim() -> None:
     assert f"{len(companies)} companies" in (STATIC / "how.html").read_text()
     whos = re.findall(r'<span class="who">([^<]+) · ', page)
     assert len(whos) == 5 and set(whos) <= set(companies)
-    for name in ("site.css", "how.html", "markdown.js"):
+    for name in ("site.css", "how.html", "markdown.js", *ICONS):
         assert (STATIC / name).is_file()
