@@ -604,3 +604,20 @@ def test_only_the_right_smoke_token_tags_a_query_smoke(
     assert tags(service(backend, smoke_token="zz-smoke", tag="prod"), "nope") == ["prod"]
     assert tags(service(backend, tag="prod"), "") == ["prod"]  # unset token matches nothing
     assert tags(service(backend, tag="prod"), None) == ["prod"]
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_a_lost_index_connection_fails_health_and_restarts_once(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    svc = service(backend)
+    lost: list[int] = []
+    with TestClient(create_app(lambda: svc, on_index_lost=lambda: lost.append(1))) as c:
+        c.get("/healthz")  # 503 here (no such pipeline), but the connection is fine
+        assert lost == []
+        svc.index_conn.close()  # as when the db container is recreated
+        r = c.get("/healthz")
+        assert r.status_code == 503 and r.json()["ok"] is False
+        c.get("/version")
+        assert lost == [1]  # once, not per request

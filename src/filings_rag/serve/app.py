@@ -5,8 +5,12 @@ what must be serialized. `create_app` takes a factory so tests can build the Ser
 `frl serve` builds it from `configs/serve.toml`.
 """
 
+import logging
+import os
+import signal
+import threading
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -19,6 +23,13 @@ from filings_rag.serve.limits import Refused
 from filings_rag.serve.service import QuestionTooLong, Service
 
 STATIC = Path(__file__).parent / "static"
+log = logging.getLogger(__name__)
+
+
+def exit_soon() -> None:
+    """Shut down a moment after the current response is sent: SIGTERM, so uvicorn stops
+    gracefully (the lifespan closes the Service and flushes traces). Docker restarts it."""
+    threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGTERM)).start()
 
 
 class AskBody(BaseModel):
@@ -31,7 +42,9 @@ class FeedbackBody(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
-def create_app(factory: Callable[[], Service]) -> FastAPI:
+def create_app(
+    factory: Callable[[], Service], on_index_lost: Callable[[], None] = exit_soon
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.service = factory()
@@ -41,6 +54,19 @@ def create_app(factory: Callable[[], Service]) -> FastAPI:
             app.state.service.close()
 
     app = FastAPI(title="Filings RAG Lab", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.state.exiting = False
+
+    @app.middleware("http")
+    async def restart_when_the_index_is_lost(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        svc: Service | None = getattr(request.app.state, "service", None)
+        if svc is not None and not app.state.exiting and svc.index_lost():
+            app.state.exiting = True
+            log.error("lost the index connection; exiting so Docker restarts the api")
+            on_index_lost()
+        return response
 
     def service(request: Request) -> Service:
         svc: Service = request.app.state.service
