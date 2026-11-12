@@ -52,6 +52,7 @@ services:
       - ${FRL_ENV_FILE:-/run/frl/env}
     environment:
       SERVE_TAG: ${SERVE_TAG:-prod}
+      LANGFUSE_HOST: https://us.cloud.langfuse.com # the Langfuse project's region (US)
     # Trust X-Forwarded-For (the rate limit's key) only from Caddy's fixed address.
     command:
       - frl
