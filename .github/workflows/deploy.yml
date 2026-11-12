@@ -1,0 +1,116 @@
+# Deploy a commit to production (by hand, from the Actions tab). Rollback = run it again with
+# an earlier SHA (the server keeps it in /opt/frl/previous).
+#
+# Builds the arm64 image natively (skipped if that SHA's image is already in ECR), stages the
+# deploy/ bundle in S3, runs deploy/deploy.sh on the server through SSM Run Command, then checks
+# that https://<host>/version reports the SHA. AWS access is OIDC into frl-gha-deploy, which
+# trusts only this repo's `production` environment (limited to main).
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA on main (to roll back, an earlier one)
+        required: true
+      acme_staging:
+        description: Use Let's Encrypt staging (first deploy only, until the site works)
+        type: boolean
+        default: false
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  ROLE: arn:aws:iam::271200701471:role/frl-gha-deploy
+  ECR: 271200701471.dkr.ecr.us-east-2.amazonaws.com/frl
+  BUCKET: frl-271200701471-data
+  HOST: filings.stigmergylabs.net
+  SHA: ${{ inputs.sha }}
+  STAGING: ${{ inputs.acme_staging && '1' || '0' }}
+
+# Explicit bash: -eo pipefail (the default shell has no pipefail).
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - name: Check the SHA
+        run: '[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::expected a full 40-character SHA"; exit 1; }'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Require the SHA to be on main
+        run: |
+          git fetch -q origin main
+          git merge-base --is-ancestor "$SHA" origin/main ||
+            { echo "::error::$SHA is not on main"; exit 1; }
+
+      - name: AWS CLI
+        run: |
+          command -v aws && exit 0
+          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && sudo /tmp/aws/install
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and push the image
+        run: |
+          if aws ecr describe-images --repository-name frl --image-ids imageTag="$SHA" >/dev/null 2>&1; then
+            echo "$ECR:$SHA already exists"; exit 0
+          fi
+          aws ecr get-login-password | docker login -u AWS --password-stdin "${ECR%%/*}"
+          docker build --build-arg GIT_SHA="$SHA" -t "$ECR:$SHA" .
+          docker push "$ECR:$SHA"
+
+      - name: Stage the deploy bundle
+        run: |
+          tar -czf /tmp/deploy.tgz -C deploy .
+          aws s3 cp --only-show-errors /tmp/deploy.tgz "s3://$BUCKET/deploy/$SHA.tgz"
+
+      - name: Deploy on the server
+        id: deploy
+        run: |
+          scripts/ssm_run.sh 1500 "deploy $SHA" <<EOS | tee /tmp/deploy.out
+          set -euo pipefail
+          export PATH=/snap/bin:/usr/local/bin:/usr/bin:/bin
+          set -a; . /etc/frl/host.env; set +a
+          d=/opt/frl/releases/$SHA
+          rm -rf "\$d.tmp" && mkdir -p "\$d.tmp"
+          aws s3 cp --only-show-errors "s3://\$FRL_BUCKET/deploy/$SHA.tgz" - | tar -xz -C "\$d.tmp"
+          rm -rf "\$d" && mv "\$d.tmp" "\$d"
+          ACME_STAGING=$STAGING "\$d/deploy.sh" $SHA
+          EOS
+          echo "status=$(sed -n 's/^FRL_DEPLOY_STATUS=//p' /tmp/deploy.out | tail -1)" >>"$GITHUB_OUTPUT"
+
+      - name: Check the live version
+        if: steps.deploy.outputs.status == 'live'
+        run: |
+          k=""; [[ "$STAGING" == 1 ]] && k="-k"  # staging certificates aren't publicly trusted
+          for _ in $(seq 1 30); do
+            got="$(curl -fsS $k --max-time 10 "https://$HOST/version" | jq -r .sha || true)"
+            [[ "$got" == "$SHA" ]] && { echo "live: $got"; exit 0; }
+            sleep 10
+          done
+          echo "::error::https://$HOST/version reports '$got', not $SHA"; exit 1
+
+      - name: No index yet
+        if: steps.deploy.outputs.status == 'no-index'
+        run: echo "::notice::Deployed, but no index is restored yet; run the restore-index workflow."

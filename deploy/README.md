@@ -8,8 +8,48 @@
   - `frl_index` is restored whole from the Nucbox's dump and can always be rebuilt.
   - `frl_app` holds `served_queries`, `feedback` and `rate_events`. It is the only data that can't be rebuilt, and the only data backed up.
 
-The deploy (P4 PR 8) renders both env files from SSM Parameter Store. Secrets never go in
-the repo, the image or Terraform state.
+The deploy renders both env files from SSM Parameter Store (`render_env.sh`). Secrets never
+go in the repo, the image or Terraform state. On the server they sit in `/run/frl` (tmpfs,
+root-only) and, as for any container, in Docker's container config on the encrypted disk.
+
+## On the server
+
+```
+/etc/frl/host.env          region, ECR repository, bucket, hostname (cloud-init)
+/opt/frl/releases/<sha>/   this directory, one per deployed commit (the last five kept)
+/opt/frl/current           → the live release
+/opt/frl/previous          the SHA before it (rollback target)
+/opt/frl/state.env         FRL_IMAGE and ACME_CA of the live release
+/run/frl/env, stack.env    rendered from SSM on each deploy
+/usr/local/bin/frl-compose docker compose for the live stack: frl-compose ps | logs -f api | …
+```
+
+There is no SSH. Get a shell with `aws ssm start-session --profile frl-admin --target <instance>`
+(needs the Session Manager plugin), or run one command with
+`AWS_PROFILE=frl-admin scripts/ssm_run.sh 60 note <<< 'frl-compose ps'`.
+
+## Deploying
+
+Both workflows run by hand from the Actions tab, in the `production` environment:
+
+- **deploy** (`sha`, `acme_staging`): builds the arm64 image (skipped if ECR has it), stages
+  this directory in S3, runs `deploy.sh <sha>` on the server through SSM Run Command, and checks
+  that `https://<host>/version` reports the SHA. **Rollback:** run it with the previous SHA.
+- **restore-index** (`dump`, an S3 key under `serving/`): runs `restore_index.sh` on the
+  server, then starts the stack.
+
+`deploy.sh` migrates `frl_app` and starts the api and Caddy only once an index has been restored.
+
+### First deploy
+
+1. `AWS_PROFILE=frl-admin scripts/serving_dump.sh structured@1 --upload s3://frl-271200701471-data`
+   on the Nucbox (under `op run`, for `DATABASE_URL`).
+2. **deploy** with the SHA and `acme_staging` on. The db starts and `frl_app` is migrated, but
+   there's no index yet.
+3. **restore-index** with the dump's key. The site comes up with a staging certificate.
+4. `AWS_PROFILE=frl-admin scripts/smoke_prod.sh <sha> -k`
+5. **deploy** again with `acme_staging` off, for the real certificate, then
+   `scripts/smoke_prod.sh <sha>` without `-k`.
 
 ## Stack env (compose interpolation)
 
@@ -21,7 +61,7 @@ the repo, the image or Terraform state.
 | `FRL_HOST` | `filings.stigmergylabs.net` | |
 | `FRL_TLS` | an email, or `internal` | `internal` = Caddy's own CA (rehearsals) |
 | `ACME_CA` | LE staging URL | until the first real certificate |
-| `SERVE_TAG` | `prod` (default), `smoke` | tags rows and traces |
+| `SERVE_TAG` | `prod` (default) | tags rows and traces; requests with the smoke token are tagged `smoke` |
 | `FRL_BIND`, `FRL_HTTP_PORT`, `FRL_HTTPS_PORT` | `0.0.0.0`, 80, 443 | |
 
 ## api env file
@@ -34,7 +74,8 @@ VOYAGE_API_KEY=...
 IP_HASH_SALT=...
 LANGFUSE_PUBLIC_KEY=...
 LANGFUSE_SECRET_KEY=...
-LANGFUSE_HOST=https://cloud.langfuse.com
+LANGFUSE_HOST=https://cloud.langfuse.com    # the default
+SMOKE_TOKEN=...                             # X-Smoke-Token: tags a query smoke
 ```
 
 ## Commands
@@ -43,7 +84,7 @@ The api reads `frl_index` at startup, so on a new host the index is restored bef
 first starts:
 
 ```sh
-C="docker compose --env-file stack.env -f compose.prod.yaml"
+C="docker compose --env-file stack.env -f compose.prod.yaml"   # on the server: frl-compose
 $C up -d db --wait
 # Migrate the app database (the index database comes migrated in its dump).
 $C run --rm --no-deps -e DATABASE_URL="$APP_DATABASE_URL" api frl db migrate

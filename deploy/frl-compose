@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# docker compose for the live stack, installed as /usr/local/bin/frl-compose by deploy.sh:
+#   frl-compose ps | logs -f api | exec db psql -U frl -d frl_app | ...
+# Renders the env files first if they're gone (they're on tmpfs, so a reboot clears them).
+set -euo pipefail
+export PATH="/snap/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+[[ -f /run/frl/stack.env && -f /run/frl/env ]] || /opt/frl/current/render_env.sh
+exec docker compose --env-file /run/frl/stack.env -f /opt/frl/current/compose.prod.yaml "$@"

@@ -32,3 +32,9 @@ variable "create_github_oidc_provider" {
   type        = bool
   default     = true
 }
+
+variable "instance_type" {
+  description = "The server (4 GB RAM is the Compose stack's budget: Postgres 1 GB buffers, api 1 GB)"
+  type        = string
+  default     = "t4g.medium"
+}

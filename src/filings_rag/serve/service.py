@@ -201,6 +201,7 @@ class Service:
         ip_salt: str = "",
         tag: str = "local",
         tracer: Tracer = NOOP,
+        smoke_token: str = "",
     ) -> None:
         self.tracer = tracer
         self.ctx = dataclasses.replace(ctx, tracer=tracer)
@@ -220,6 +221,7 @@ class Service:
             log.warning("no IP_HASH_SALT: rate-limit hashes change on restart")
         self.ip_salt = ip_salt or secrets.token_hex(16)
         self.tag = tag
+        self.smoke_token = smoke_token
         self._lock = threading.Lock()
 
     @classmethod
@@ -271,14 +273,23 @@ class Service:
             ip_salt=settings.ip_hash_salt,
             tag=settings.serve_tag,
             tracer=tracer,
+            smoke_token=settings.smoke_token,
         )
 
     def close(self) -> None:
         self.index_conn.close()
         self.tracer.shutdown()
 
-    def ask(self, question: str, *, client_ip: str | None = None) -> Asked:
-        """Raises `QuestionTooLong` (nothing recorded) or `limits.Refused`."""
+    def is_smoke(self, token: str | None) -> bool:
+        return bool(self.smoke_token and token) and secrets.compare_digest(
+            self.smoke_token.encode(), (token or "").encode()
+        )
+
+    def ask(
+        self, question: str, *, client_ip: str | None = None, smoke_token: str | None = None
+    ) -> Asked:
+        """Raises `QuestionTooLong` (nothing recorded) or `limits.Refused`. A matching
+        `smoke_token` tags the query "smoke" instead of the serve tag."""
         question = question.strip()
         if not question:
             raise QuestionTooLong("empty question")
@@ -286,7 +297,7 @@ class Service:
             raise QuestionTooLong(f"questions are limited to {self.max_question_chars} characters")
         qid = uuid.uuid4()
         ip_hash = limits.ip_hash(client_ip, self.ip_salt) if client_ip else None
-        tags = (self.tag,)
+        tags = ("smoke",) if self.is_smoke(smoke_token) else (self.tag,)
         with psycopg.connect(self.app_url) as conn:
             self.limits.check_rate(conn, ip_hash)  # Refused (429): nothing recorded or traced
         with self.tracer.trace(

@@ -585,3 +585,22 @@ def test_refusals_are_traced_without_a_generate_step(
     assert cap.names() == [] and cap.error is None  # a refusal, not an error
     assert cap.fields["output"] == {"status": "refused", "refusal": "daily_cap"}
     assert backend.prompts == []
+
+
+@pytest.mark.db
+@pytest.mark.skipif("DATABASE_URL" not in os.environ, reason="no DATABASE_URL")
+def test_only_the_right_smoke_token_tags_a_query_smoke(
+    conn: psycopg.Connection[Any], backend: Backend
+) -> None:
+    def tags(svc: Service, header: str | None) -> list[str]:
+        with TestClient(create_app(lambda: svc)) as c:
+            h = {"X-Smoke-Token": header} if header is not None else {}
+            r = c.post("/ask", json={"question": "ZZ FY2022 revenue?"}, headers=h)
+        assert r.status_code == 200
+        return list(row(conn, r.json()["query_id"])["tags"])
+
+    with_token = service(backend, smoke_token="zz-smoke", tag="prod")
+    assert tags(with_token, "zz-smoke") == ["smoke"]
+    assert tags(service(backend, smoke_token="zz-smoke", tag="prod"), "nope") == ["prod"]
+    assert tags(service(backend, tag="prod"), "") == ["prod"]  # unset token matches nothing
+    assert tags(service(backend, tag="prod"), None) == ["prod"]

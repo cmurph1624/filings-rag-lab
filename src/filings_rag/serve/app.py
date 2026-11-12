@@ -55,7 +55,9 @@ def create_app(factory: Callable[[], Service]) -> FastAPI:
         # Behind Caddy, uvicorn's proxy headers make this the client's address.
         client = request.client.host if request.client else None
         try:
-            asked = service(request).ask(body.question, client_ip=client)
+            asked = service(request).ask(
+                body.question, client_ip=client, smoke_token=request.headers.get("x-smoke-token")
+            )
         except QuestionTooLong as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
         except Refused as e:
