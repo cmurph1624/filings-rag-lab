@@ -39,8 +39,19 @@
   /* The answer */
   #out:empty { display: none; }
   #out .card { margin-top: 8px; }
-  .answer { white-space: pre-wrap; font-size: 17px; }
+  .answer { font-size: 17px; overflow-wrap: anywhere; }
+  .answer > :first-child { margin-top: 0; }
+  .answer > :last-child { margin-bottom: 0; }
+  .answer p, .answer ul, .answer ol { margin: 0 0 12px; }
+  .answer ul, .answer ol { padding-left: 22px; }
+  .answer li { margin: 4px 0; }
+  .answer h3 { font-size: 18px; margin: 18px 0 8px; }
+  .answer code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: 1px 4px; border-radius: 4px; }
   .answer a { text-decoration: none; font-size: .8em; vertical-align: super; }
+  .md-table { overflow-x: auto; margin: 0 0 12px; }
+  .md-table table { border-collapse: collapse; font-size: 15px; }
+  .md-table th, .md-table td { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  .md-table th { color: var(--muted); font-weight: 600; }
   .err { color: var(--warn); }
   .loading { color: var(--muted); }
   #out h4 { font-size: 15px; margin: 22px 0 6px; }
@@ -137,20 +148,12 @@
     tracing), and stored to improve the system. Visitor addresses are never stored. Not investment
     advice.</footer>
 </main>
+<script src="/markdown.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const ESC = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
 const link = (url, label) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : esc(label);
-
-function linkCitations(text, excerpts, facts) {
-  const known = new Set([...excerpts.map((e) => String(e.n)), ...facts.map((f) => f.n)]);
-  return esc(text).replace(/\[((?:F?\d+)(?:\s*,\s*F?\d+)*)\]/g, (m, inner) =>
-    inner.split(",").map((k) => {
-      k = k.trim();
-      return known.has(k) ? `<a href="#src-${esc(k)}">[${esc(k)}]</a>` : `[${esc(k)}]`;
-    }).join(""));
-}
 
 function render(r) {
   const out = $("#out");
@@ -171,7 +174,7 @@ function render(r) {
       <span class="meta">· page ${esc(e.page)}${e.section ? " · " + esc(e.section) : ""}${e.cited ? "" : " · not cited"}</span>
       <div class="snip">${esc(e.snippet)}…</div></li>`).join("");
   out.innerHTML = `<div class="card">
-      <div class="answer">${linkCitations(r.answer, r.excerpts, r.facts)}</div>
+      <div class="answer">${renderAnswer(r.answer, [...r.excerpts.map((e) => e.n), ...r.facts.map((f) => f.n)])}</div>
       <div class="row"><span class="meta">Was this right?</span>
         <button class="ghost" data-r="up" type="button" aria-label="Yes">👍</button>
         <button class="ghost" data-r="down" type="button" aria-label="No">👎</button>

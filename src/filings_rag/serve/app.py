@@ -92,6 +92,10 @@ def create_app(
     def site_css() -> FileResponse:
         return FileResponse(STATIC / "site.css", media_type="text/css")
 
+    @app.get("/markdown.js", include_in_schema=False)
+    def markdown_js() -> FileResponse:
+        return FileResponse(STATIC / "markdown.js", media_type="text/javascript")
+
     @app.post("/ask")
     def ask(body: AskBody, request: Request) -> JSONResponse:
         # Behind Caddy, uvicorn's proxy headers make this the client's address.

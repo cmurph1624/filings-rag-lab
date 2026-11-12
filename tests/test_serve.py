@@ -305,6 +305,8 @@ def test_health_version_and_page(client: TestClient, monkeypatch: pytest.MonkeyP
     assert "<!-- companies -->" not in page.text
     how = client.get("/how")
     assert how.status_code == 200 and "A retrieval pipeline you can measure" in how.text
+    js = client.get("/markdown.js")
+    assert js.status_code == 200 and "renderAnswer" in js.text
     css = client.get("/site.css")
     assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
 
@@ -643,5 +645,5 @@ def test_the_pages_match_the_coverage_they_claim() -> None:
     assert f"{len(companies)} companies" in (STATIC / "how.html").read_text()
     whos = re.findall(r'<span class="who">([^<]+) · ', page)
     assert len(whos) == 5 and set(whos) <= set(companies)
-    for name in ("site.css", "how.html"):
+    for name in ("site.css", "how.html", "markdown.js"):
         assert (STATIC / name).is_file()
