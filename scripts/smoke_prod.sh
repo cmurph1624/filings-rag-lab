@@ -39,8 +39,8 @@ echo "ok   version $(jq -r '.sha[0:12] + " " + .pipeline + " " + .model' <<<"$v"
 a="$(ask "What is the FY2018 capital expenditure amount (in USD millions) for 3M?")"
 # Gold: $1,577M (FinanceBench). The router sends it to the XBRL facts, so the citation may be
 # a fact [F1] rather than an excerpt [n]: either counts.
-jq -e '.status == "answered" and (.answer | test("1,?577"))
-       and (any(.excerpts[]; .cited) or (.facts | length) > 0)' \
+jq -e '.status == "answered" and (.answer | test("(^|[^0-9,])1,?577([^0-9]|$)"))
+       and (any(.excerpts[]; .cited) or ((.facts | length) > 0 and (.answer | test("\\[F[0-9]+\\]"))))' \
   <<<"$a" >/dev/null || fail "answer: $(jq -c '{status, refusal, error, answer: .answer[0:200]}' <<<"$a")"
 echo "ok   answered in $(jq -r .latency_s <<<"$a") s for \$$(jq -r .cost_usd <<<"$a"): $(jq -r '.answer[0:100]' <<<"$a")…"
 qid="$(jq -r .query_id <<<"$a")"
