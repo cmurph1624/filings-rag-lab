@@ -32,8 +32,8 @@ for _ in $(seq 60); do
 done
 docker exec -i "$name" pg_restore -U frl -d frl_app --no-owner --exit-on-error <"$tmp/app.dump"
 docker exec "$name" psql -X -U frl -d frl_app -Atc "
-  SELECT 'served_queries', count(*) FROM served_queries UNION ALL
-  SELECT 'feedback', count(*) FROM feedback UNION ALL
-  SELECT 'rate_events', count(*) FROM rate_events UNION ALL
+  SELECT 'served_queries', count(*)::text FROM served_queries UNION ALL
+  SELECT 'feedback', count(*)::text FROM feedback UNION ALL
+  SELECT 'rate_events', count(*)::text FROM rate_events UNION ALL
   SELECT 'newest query', coalesce(max(created_at)::text, '-') FROM served_queries" | tr '|' '\t'
 echo "drill ok"
