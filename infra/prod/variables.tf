@@ -16,9 +16,12 @@ variable "domain" {
 }
 
 variable "github_repo" {
-  description = "owner/name allowed to assume the deploy role"
+  # The repo uses GitHub's immutable OIDC subjects: owner and repo carry their numeric IDs, so a
+  # repo deleted and recreated under the same name can't assume the role. Check it with
+  #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub   (sub_claim_prefix)
+  description = "The repo in the OIDC subject allowed to assume the deploy role: owner@id/name@id"
   type        = string
-  default     = "cmurph1624/filings-rag-lab"
+  default     = "cmurph1624@4094263/filings-rag-lab@1437814155"
 }
 
 variable "github_environment" {

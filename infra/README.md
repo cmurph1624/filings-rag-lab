@@ -7,7 +7,7 @@ AWS account 271200701471, us-east-2. Two configurations:
   - **network:** VPC, public subnet, internet gateway, and a security group allowing 80/443 only (no SSH);
   - **data bucket:** `frl-271200701471-data`, with `serving/`, `deploy/` and `backups/`;
   - **ECR:** repository `frl`, with immutable tags, keeping the last 15 images;
-  - **IAM:** the instance role, plus a GitHub OIDC deploy role usable only from this repo's `production` environment;
+  - **IAM:** the instance role, plus a GitHub OIDC deploy role usable only from this repo's `production` environment (matched by the repo's immutable subject, `owner@id/name@id`);
   - **SSM:** `/frl/prod/*` secret placeholders;
   - **Route 53:** the zone for `filings.stigmergylabs.net`;
   - **the server:** a t4g.medium (ARM, 4 GB) on Ubuntu 24.04 with a 30 GB encrypted disk,
