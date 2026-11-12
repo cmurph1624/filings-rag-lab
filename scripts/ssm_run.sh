@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a shell script (stdin) on the server through SSM Run Command and wait for it:
+# Run a bash script (stdin) on the server through SSM Run Command and wait for it:
 #
 #   scripts/ssm_run.sh <timeout-seconds> <comment> < script.sh
 #
@@ -15,7 +15,11 @@ iid="$(aws ec2 describe-instances \
   --query 'Reservations[].Instances[].InstanceId' --output text)"
 [[ "$iid" =~ ^i-[0-9a-f]+$ ]] || { echo "expected one running instance tagged app=frl, got: '$iid'" >&2; exit 1; }
 
-params="$(jq -Rs --arg t "$timeout" '{commands: [.], executionTimeout: [$t]}')"
+# AWS-RunShellScript runs its commands with sh (dash on Ubuntu), so the script goes to bash
+# whole, base64-encoded: no quoting or shebang to get wrong.
+script="$(base64 -w0)"
+params="$(jq -n --arg s "$script" --arg t "$timeout" \
+  '{commands: ["echo \($s) | base64 -d | bash"], executionTimeout: [$t]}')"
 cid="$(aws ssm send-command --instance-ids "$iid" --document-name AWS-RunShellScript \
   --comment "${comment:0:100}" --parameters "$params" --query Command.CommandId --output text)"
 echo "command $cid on $iid"

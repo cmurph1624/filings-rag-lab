@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Render the stack's env files from SSM (/frl/prod/*) into /run/frl (tmpfs, root-only):
 #   /run/frl/env        the api's env file (compose env_file): database URLs and API keys
-#   /run/frl/stack.env  compose interpolation: POSTGRES_PASSWORD, FRL_HOST, FRL_TLS, plus
-#                       /opt/frl/state.env (FRL_IMAGE, ACME_CA), which deploy.sh writes
+#   /run/frl/stack.env  compose interpolation: POSTGRES_PASSWORD, FRL_HOST, FRL_TLS, plus the
+#                       release state (FRL_IMAGE, ACME_CA): $FRL_STATE, default
+#                       /opt/frl/state.env (deploy.sh passes the new release's while deploying)
 # Stops if a required secret is missing or still the Terraform placeholder. Langfuse and the
 # smoke token are optional (tracing is off without the Langfuse keys).
 set -euo pipefail
@@ -46,5 +47,6 @@ for path, values in (("/run/frl/env", api), ("/run/frl/stack.env", stack)):
 '
 {
   echo "FRL_HOST=$FRL_HOST"
-  [[ -f /opt/frl/state.env ]] && cat /opt/frl/state.env
+  state="${FRL_STATE:-/opt/frl/state.env}"
+  if [[ -f "$state" ]]; then cat "$state"; fi
 } >>/run/frl/stack.env

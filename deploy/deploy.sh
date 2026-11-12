@@ -4,9 +4,9 @@
 #
 #   ACME_STAGING=0|1 /opt/frl/releases/<sha>/deploy.sh <sha>
 #
-# Steps: render the env from SSM; pull <ecr>/frl:<sha>; point /opt/frl/current at this
-# release; start the db and migrate frl_app; start the api and Caddy (only once an index has
-# been restored: until then the api has nothing to read); record the previous release.
+# Steps: pull <ecr>/frl:<sha>; render the env from SSM; start the db and migrate frl_app;
+# start the api and Caddy (only once an index has been restored: until then the api has
+# nothing to read); then point /opt/frl/current at this release and record the previous one.
 #
 # Rollback: run the workflow again with the previous SHA (cat /opt/frl/previous).
 set -euo pipefail
@@ -28,27 +28,40 @@ docker pull -q "$image"
 
 install -m 0755 "$HERE/frl-compose" /usr/local/bin/frl-compose
 umask 077
-printf 'FRL_IMAGE=%s\nACME_CA=%s\n' "$image" "$acme" >/opt/frl/state.env.new
-mv /opt/frl/state.env.new /opt/frl/state.env
-ln -sfn "$HERE" /opt/frl/current.new && mv -T /opt/frl/current.new /opt/frl/current
-"$HERE/render_env.sh"
+# The new release takes over (current, state.env, previous) only once it's up. Until then
+# compose runs from this directory with the new state; on failure the env files are rendered
+# again for the live release, so frl-compose keeps matching it.
+next=/opt/frl/state.env.next
+printf 'FRL_IMAGE=%s\nACME_CA=%s\n' "$image" "$acme" >"$next"
+dc() { docker compose --env-file /run/frl/stack.env -f "$HERE/compose.prod.yaml" "$@"; }
+restore_env() {
+  if [[ -n "$prev" ]]; then /opt/frl/current/render_env.sh || true; fi
+  echo "deploy failed; /opt/frl/current is still ${prev:-unset}" >&2
+}
+trap restore_env ERR
+FRL_STATE="$next" "$HERE/render_env.sh"
 
 say "starting the db; migrating frl_app"
-frl-compose up -d --wait db
+dc up -d --wait db
 app_url="$(grep '^APP_DATABASE_URL=' /run/frl/env | cut -d= -f2-)"
-frl-compose run --rm --no-deps -e DATABASE_URL="$app_url" api frl db migrate
+dc run --rm --no-deps -e DATABASE_URL="$app_url" api frl db migrate
 
-indexed="$(frl-compose exec -T db psql -X -U frl -d frl_index -Atc \
+indexed="$(dc exec -T db psql -X -U frl -d frl_index -Atc \
   "SELECT to_regclass('public.pipelines') IS NOT NULL")"
 if [[ "$indexed" != t ]]; then
   say "no index restored yet: the api and Caddy stay down. Run the restore-index workflow."
-  echo "FRL_DEPLOY_STATUS=no-index"
+  status=no-index
 else
   say "starting the api and Caddy"
-  frl-compose up -d --wait --remove-orphans
-  echo "FRL_DEPLOY_STATUS=live"
+  dc up -d --wait --remove-orphans
+  status=live
 fi
+trap - ERR
+
+mv "$next" /opt/frl/state.env
 if [[ -n "$prev" && "$prev" != "$sha" ]]; then echo "$prev" >/opt/frl/previous; fi
+ln -sfn "$HERE" /opt/frl/current.new && mv -T /opt/frl/current.new /opt/frl/current
+echo "FRL_DEPLOY_STATUS=$status"
 # Keep the last five releases' bundles.
 ls -1t /opt/frl/releases | tail -n +6 | while read -r old; do
   [[ "$old" == "$sha" || "$old" == "$prev" ]] || rm -rf "/opt/frl/releases/$old"
