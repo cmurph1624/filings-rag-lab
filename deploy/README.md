@@ -22,7 +22,7 @@ root-only) and, as for any container, in Docker's container config on the encryp
 /opt/frl/state.env         FRL_IMAGE and ACME_CA of the live release
 /run/frl/env, stack.env    rendered from SSM on each deploy
 /usr/local/bin/frl-compose docker compose for the live stack: frl-compose ps | logs -f api | …
-/etc/systemd/system/frl-backup.{service,timer}   the daily frl_app backup (backup.sh)
+/usr/local/bin/frl-backup  backup.sh; run daily by /etc/systemd/system/frl-backup.{service,timer}
 /var/backups/frl/          the last 7 backups, also in S3
 ```
 
@@ -160,14 +160,14 @@ is never backed up; the restore-index workflow rebuilds it from the Nucbox's dum
 ### Restoring into production
 
 The server can't read its backups, so hand it a short-lived link from an admin profile.
-`--clean` replaces what's in `frl_app`:
+`--clean` replaces what's in `frl_app`, in one transaction: if the restore fails, the old data stays.
 
 ```sh
 url="$(aws s3 presign --profile frl-admin --expires-in 600 s3://frl-271200701471-data/backups/frl_app/<file>.dump)"
 AWS_PROFILE=frl-admin scripts/ssm_run.sh 600 restore-app <<EOF
 set -euo pipefail
 frl-compose stop api
-curl -fsS '$url' | frl-compose exec -T db pg_restore -U frl -d frl_app --clean --if-exists --exit-on-error
+curl -fsS '$url' | frl-compose exec -T db pg_restore -U frl -d frl_app --clean --if-exists --single-transaction --exit-on-error
 frl-compose up -d --wait
 EOF
 ```

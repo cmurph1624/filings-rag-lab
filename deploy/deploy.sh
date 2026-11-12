@@ -36,7 +36,9 @@ aws ecr get-login-password | docker login --username AWS --password-stdin "${FRL
 docker pull -q "$image"
 
 install -m 0755 "$HERE/frl-compose" /usr/local/bin/frl-compose
-# The daily frl_app backup. Its service runs /opt/frl/current/backup.sh, i.e. the live release's.
+# The daily frl_app backup. Installed outside the release, like frl-compose, so rolling back to
+# a release from before backups existed doesn't break the timer.
+install -m 0755 "$HERE/backup.sh" /usr/local/bin/frl-backup
 install -m 0644 "$HERE"/systemd/frl-backup.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q --now frl-backup.timer

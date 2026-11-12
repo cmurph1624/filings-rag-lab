@@ -5,4 +5,4 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/frl/current/backup.sh
+ExecStart=/usr/local/bin/frl-backup

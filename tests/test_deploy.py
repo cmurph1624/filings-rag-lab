@@ -63,12 +63,14 @@ def test_workflows_deploy_from_the_production_environment_only() -> None:
         assert "runs-on: ubuntu-24.04-arm" in text, name  # the server is arm64
 
 
-def test_deploy_installs_the_backup_timer_for_the_live_release() -> None:
+def test_deploy_installs_the_backup_timer_outside_the_release() -> None:
     systemd = REPO_ROOT / "deploy" / "systemd"
     service = (systemd / "frl-backup.service").read_text()
-    assert "ExecStart=/opt/frl/current/backup.sh" in service
+    assert "ExecStart=/usr/local/bin/frl-backup" in service
     assert "OnCalendar=" in (systemd / "frl-backup.timer").read_text()
     deploy = (REPO_ROOT / "deploy" / "deploy.sh").read_text()
+    # Outside /opt/frl/current: a rollback to a release without backup.sh keeps backing up.
+    assert '"$HERE/backup.sh" /usr/local/bin/frl-backup' in deploy
     assert "systemd/frl-backup.{service,timer}" in deploy
     assert "enable -q --now frl-backup.timer" in deploy
 

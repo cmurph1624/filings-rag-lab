@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Daily backup of frl_app, the only data on the server that can't be rebuilt (frl_index is
-# restored from the Nucbox's dump and never backed up). Run as root by frl-backup.timer:
+# restored from the Nucbox's dump and never backed up). Run as root by frl-backup.timer, from
+# the copy deploy.sh installs:
 #
-#   /opt/frl/current/backup.sh
+#   /usr/local/bin/frl-backup
 #
 # Dumps frl_app through the db container (custom format, compressed), checks the archive lists
 # the app's tables, uploads it to s3://$FRL_BUCKET/backups/frl_app/ and keeps the newest 7
