@@ -36,7 +36,8 @@
 
   function renderAnswer(text, knownKeys) {
     const known = new Set([...(knownKeys || [])].map(String));
-    const lines = esc(text).split(/\r?\n/);
+    // NUL marks protected code spans in inline(), so none may come from the text itself.
+    const lines = esc(text).replace(/\u0000/g, "").split(/\r?\n/);
     const out = [];
     let i = 0;
     while (i < lines.length) {

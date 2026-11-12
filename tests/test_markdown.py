@@ -79,3 +79,8 @@ def test_arithmetic_stars_and_single_newlines_stay_plain() -> None:
     html = render("Margin = 5 * 3 * 2\nnext line")
     assert "<em>" not in html
     assert "<p>Margin = 5 * 3 * 2<br>next line</p>" in html
+
+
+def test_nul_characters_in_the_text_cannot_fake_a_code_span() -> None:
+    html = render("x \u00000\u0000 y")
+    assert "undefined" not in html and "<code>" not in html
