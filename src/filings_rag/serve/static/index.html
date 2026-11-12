@@ -4,58 +4,138 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Filings RAG Lab</title>
+<meta name="description" content="Ask questions about public companies' SEC filings. Answers cite the filing pages they come from.">
+<link rel="stylesheet" href="/site.css">
 <style>
-  :root { --bg:#fbfaf7; --fg:#1d1d1b; --muted:#6b6a65; --line:#e3e1da; --card:#ffffff;
-          --accent:#2f5d8a; --warn:#8a5a2f; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#151514; --fg:#ecebe6; --muted:#9a998f; --line:#2c2b28; --card:#1d1d1b;
-            --accent:#8bb4dd; --warn:#d9a774; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
-  h1 { font-size:1.5rem; margin:0 0 4px; }
-  .sub { color:var(--muted); margin:0 0 24px; font-size:.95rem; }
-  form { display:flex; gap:8px; }
-  textarea { flex:1; min-height:3.2em; resize:vertical; padding:10px 12px; font:inherit;
-             color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; }
-  button { font:inherit; padding:8px 16px; border-radius:8px; border:1px solid var(--accent);
-           background:var(--accent); color:var(--bg); cursor:pointer; }
-  button[disabled] { opacity:.5; cursor:default; }
-  button.ghost { background:transparent; color:var(--fg); border-color:var(--line); padding:4px 10px; }
-  button.ghost.on { border-color:var(--accent); color:var(--accent); }
-  .note { color:var(--muted); font-size:.85rem; margin:8px 0 0; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
-          padding:16px 18px; margin-top:24px; }
-  .answer { white-space:pre-wrap; }
-  .answer a { color:var(--accent); text-decoration:none; font-size:.8em; vertical-align:super; }
-  .err { color:var(--warn); }
-  h2 { font-size:1rem; margin:20px 0 8px; }
-  ol.src { list-style:none; padding:0; margin:0; }
-  ol.src li { border-top:1px solid var(--line); padding:10px 0; font-size:.9rem; }
-  ol.src li.dim { opacity:.6; }
-  .tag { display:inline-block; min-width:2.4em; color:var(--accent); font-weight:600; }
-  .meta { color:var(--muted); }
-  .snip { color:var(--muted); margin-top:4px; font-size:.85rem; overflow-wrap:anywhere; }
-  a { color:var(--accent); }
-  .row { display:flex; align-items:center; gap:8px; margin-top:16px; flex-wrap:wrap; }
+  form { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  label { font-weight: 600; font-size: 15px; }
+  .ask { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  textarea { flex: 1 1 420px; min-width: 0; min-height: 5.2em; padding: 14px 16px; font: inherit;
+    font-size: 17px; color: var(--fg); background: var(--card); border: 1px solid var(--line-strong);
+    border-radius: 12px; resize: vertical; }
+  textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { font: inherit; cursor: pointer; }
+  #go { min-height: 52px; padding: 0 28px; font-weight: 600; font-size: 17px; color: var(--on-accent);
+    background: var(--accent); border: none; border-radius: 12px; }
+  #go[disabled] { opacity: .55; cursor: default; }
+
+  .suggest { display: flex; flex-wrap: wrap; gap: 12px; }
+  .suggest button { flex: 1 1 300px; min-height: 44px; text-align: left; display: flex;
+    flex-direction: column; gap: 6px; padding: 16px 18px; color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px; }
+  .suggest button:hover { border-color: var(--accent); }
+  .suggest .who { font-size: 13px; font-weight: 600; color: var(--accent); }
+
+  ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 16px; }
+  ol.steps li { flex: 1 1 220px; display: flex; flex-direction: column; gap: 10px; }
+  ol.steps .n { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft);
+    color: var(--accent); font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  ol.steps h3 { margin: 0; font-size: 18px; }
+
+  ul.chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  ul.chips li { padding: 6px 12px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 999px; font-size: 14px; }
+
+  /* The answer */
+  #out:empty { display: none; }
+  #out .card { margin-top: 8px; }
+  .answer { white-space: pre-wrap; font-size: 17px; }
+  .answer a { text-decoration: none; font-size: .8em; vertical-align: super; }
+  .err { color: var(--warn); }
+  .loading { color: var(--muted); }
+  #out h4 { font-size: 15px; margin: 22px 0 6px; }
+  ol.src { list-style: none; padding: 0; margin: 0; }
+  ol.src li { border-top: 1px solid var(--line); padding: 10px 0; font-size: 14px; }
+  ol.src li.dim { opacity: .65; }
+  .tag { display: inline-block; min-width: 2.4em; color: var(--accent); font-weight: 600; }
+  .meta { color: var(--muted); }
+  .snip { color: var(--muted); margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  button.ghost { min-width: 44px; min-height: 44px; background: transparent; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px; }
+  button.ghost.on { border-color: var(--accent); background: var(--accent-soft); }
 </style>
 </head>
 <body>
+<header class="top"><div>
+  <a class="brand" href="/">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke-width="1.8" aria-hidden="true"><rect x="5" y="3" width="15" height="20" rx="2"/><path d="M9 9h7M9 13h7M9 17h4"/><circle cx="20" cy="20" r="4.5"/><path d="M23.3 23.3l2.7 2.7"/></svg>
+    Filings RAG Lab</a>
+  <nav aria-label="Main"><a href="/" aria-current="page">Ask</a><a href="/how">How it works</a></nav>
+</div></header>
+
 <main>
-  <h1>Filings RAG Lab</h1>
-  <p class="sub">Ask about the SEC filings of the companies in FinanceBench's open subset,
-    fiscal years 2015–2023. Answers cite the filing excerpts and XBRL facts they use.
-    <a href="https://github.com/patronus-ai/financebench">About the benchmark</a>.</p>
-  <form id="f">
-    <textarea id="q" maxlength="500" placeholder="e.g. What was 3M's FY2022 capital expenditure?" required></textarea>
-    <button id="go" type="submit">Ask</button>
-  </form>
-  <p class="note">Questions and answers are logged to improve the system, and are sent to
-    Anthropic (to answer) and Langfuse (for tracing). Don't enter personal information.
-    Answers can be wrong: check the cited filing.</p>
-  <div id="out"></div>
+  <section class="intro">
+    <h1 class="display">Ask a question about a public company's annual and quarterly reports</h1>
+    <p class="lede">Answers come from the companies' own SEC filings, and every claim links back to
+      the page it came from. 32 companies, fiscal years 2015–2023.</p>
+    <form id="f">
+      <label for="q">Your question</label>
+      <div class="ask">
+        <textarea id="q" maxlength="500" rows="3" required
+          placeholder="e.g. What drove revenue change as of the FY22 for AMD?"></textarea>
+        <button id="go" type="submit">Ask</button>
+      </div>
+      <p class="small">Takes 10–20 seconds. Questions are logged to improve the system. Don't enter
+        personal information. Answers can be wrong: check the cited filing.</p>
+    </form>
+    <div id="out" aria-live="polite"></div>
+  </section>
+
+  <section class="stack" aria-labelledby="try">
+    <h2 id="try" class="eyebrow">Try one of these</h2>
+    <div class="suggest">
+      <button type="button"><span class="who">3M · judgment</span><span>Is 3M a capital-intensive business based on FY2022 data?</span></button>
+      <button type="button"><span class="who">AMD · narrative</span><span>What drove revenue change as of the FY22 for AMD?</span></button>
+      <button type="button"><span class="who">Microsoft · numbers</span><span>Has Microsoft increased its debt on balance sheet between FY2023 and the FY2022 period?</span></button>
+      <button type="button"><span class="who">American Express · narrative</span><span>Was American Express able to retain card members during 2022?</span></button>
+      <button type="button"><span class="who">PepsiCo · narrative</span><span>As of FY2023Q1, why did Pepsico raise full year guidance for FY2023?</span></button>
+    </div>
+  </section>
+
+  <section class="stack" aria-labelledby="what" style="gap:28px">
+    <div class="intro" style="gap:10px; max-width:720px">
+      <h2 id="what" class="h2">What happens when you ask</h2>
+      <p class="lede" style="font-size:17px">Public companies file long reports with the U.S.
+        Securities and Exchange Commission every quarter and every year. This site reads about 370
+        of them so you don't have to. Here's what it does with your question, in four steps.</p>
+    </div>
+    <ol class="steps">
+      <li class="card"><span class="n">1</span><h3>Work out which company and year you mean</h3>
+        <p>Asking about 3M in 2022 narrows hundreds of reports down to the few from 3M around 2022.</p></li>
+      <li class="card"><span class="n">2</span><h3>Look up the numbers, or find the right pages</h3>
+        <p>For figures like debt or cash flow, it uses the exact numbers companies report to the SEC
+          and does the math itself. For everything else, it searches the reports for the passages
+          most likely to hold the answer.</p></li>
+      <li class="card"><span class="n">3</span><h3>Write an answer from only what it found</h3>
+        <p>An AI model, Claude, reads those passages and numbers and writes a short answer, marking
+          each source with a number like [2].</p></li>
+      <li class="card"><span class="n">4</span><h3>Let you check every claim</h3>
+        <p>Each number links to the original filing on the SEC website, with the page and section.</p></li>
+    </ol>
+    <div class="cards">
+      <div class="panel grow"><h3>How often is it right?</h3>
+        <p>On FinanceBench, a public test of 150 questions written by financial analysts, it
+          answers about 87 in 100 correctly. Think of it as a fast research assistant: useful, not
+          infallible. Check the cited page before relying on an answer.</p></div>
+      <div class="panel grow"><h3>What it won't do</h3>
+        <p>It only knows the 32 companies below, from 2015 to 2023. It doesn't give investment
+          advice or look at today's stock price. If it can't tell which company you mean, it says so
+          instead of guessing.</p></div>
+    </div>
+    <p><a href="/how" style="font-weight:600">The technical details: pipeline, evaluation and infrastructure →</a></p>
+  </section>
+
+  <section class="stack" aria-labelledby="cov" style="gap:14px">
+    <h2 id="cov" class="eyebrow">Companies covered</h2>
+    <ul class="chips"><!-- companies --></ul>
+    <p class="small">10-K annual reports, 10-Q quarterly reports, 8-K current reports and earnings
+      releases, fiscal years 2015–2023.</p>
+  </section>
+
+  <footer>Questions and answers are sent to Anthropic (to write the answer) and Langfuse (for
+    tracing), and stored to improve the system. Visitor addresses are never stored. Not investment
+    advice.</footer>
 </main>
 <script>
 const $ = (s) => document.querySelector(s);
@@ -96,9 +176,9 @@ function render(r) {
         <button class="ghost" data-r="up" type="button" aria-label="Yes">👍</button>
         <button class="ghost" data-r="down" type="button" aria-label="No">👎</button>
         <span id="fb" class="meta"></span></div>
-      ${facts ? `<h2>Facts (computed from XBRL)</h2><ol class="src">${facts}</ol>` : ""}
-      <h2>Excerpts</h2><ol class="src">${excerpts}</ol>
-      <p class="note">${esc(r.model)} · ${esc(r.latency_s)} s · $${Number(r.cost_usd).toFixed(4)} at API list price</p>
+      ${facts ? `<h4>Facts (computed from XBRL)</h4><ol class="src">${facts}</ol>` : ""}
+      <h4>Excerpts</h4><ol class="src">${excerpts}</ol>
+      <p class="small" style="margin-top:12px">${esc(r.model)} · ${esc(r.latency_s)} s · $${Number(r.cost_usd).toFixed(4)} at API list price</p>
     </div>`;
   out.querySelectorAll("button[data-r]").forEach((b) => b.onclick = async () => {
     out.querySelectorAll("button[data-r]").forEach((x) => x.classList.toggle("on", x === b));
@@ -113,7 +193,7 @@ $("#f").onsubmit = async (ev) => {
   const q = $("#q").value.trim();
   if (!q) return;
   $("#go").disabled = true;
-  $("#out").innerHTML = `<div class="card meta">Reading the filings… (10–20 s)</div>`;
+  $("#out").innerHTML = `<div class="card loading">Reading the filings… (10–20 s)</div>`;
   try {
     const res = await fetch("/ask", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({question: q})});
@@ -127,6 +207,12 @@ $("#f").onsubmit = async (ev) => {
 };
 $("#q").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); }
+});
+// A suggestion fills the box; asking stays a deliberate click (each question costs money).
+document.querySelectorAll(".suggest button").forEach((b) => b.onclick = () => {
+  $("#q").value = b.lastElementChild.textContent;
+  $("#q").focus();
+  $("#q").scrollIntoView({block: "center", behavior: "smooth"});
 });
 </script>
 </body>
