@@ -524,6 +524,11 @@ class Service:
             )
         return True
 
+    def index_lost(self) -> bool:
+        """The index connection is closed or broken (e.g. the db restarted). The pipeline objects
+        hold it, so it can't be swapped in place: the process exits and is restarted."""
+        return bool(self.index_conn.closed or self.index_conn.broken)
+
     def health(self) -> dict[str, Any]:
         """Both databases answer and the served pipeline is built. No model call."""
         with self._lock:

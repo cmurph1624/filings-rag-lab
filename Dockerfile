@@ -28,7 +28,8 @@ ARG GIT_SHA=unknown
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 GIT_SHA=$GIT_SHA
 USER frl
 EXPOSE 8000
+# /healthz queries both databases (503 if not), so a lost connection is noticed within 15 s.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/version', timeout=4)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
 # compose.prod.yaml sets --forwarded-allow-ips to the Caddy container's fixed address.
 CMD ["frl", "serve", "--config", "configs/serve.toml", "--host", "0.0.0.0", "--port", "8000"]
