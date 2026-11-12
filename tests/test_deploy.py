@@ -13,18 +13,22 @@ DIGEST = re.compile(r"pgvector/pgvector:pg17@sha256:[0-9a-f]{64}")
 def test_the_dump_uses_the_production_db_image() -> None:
     """A dump restores cleanly only into the same Postgres/pgvector build that made it."""
     compose = DIGEST.findall((REPO_ROOT / "deploy" / "compose.prod.yaml").read_text())
-    dump = DIGEST.findall((REPO_ROOT / "scripts" / "serving_dump.sh").read_text())
-    assert len(compose) == 1 and dump == compose
+    assert len(compose) == 1
+    for script in ("serving_dump.sh", "backup_drill.sh"):
+        assert DIGEST.findall((REPO_ROOT / "scripts" / script).read_text()) == compose, script
 
 
 SCRIPTS = [
     "scripts/serving_dump.sh",
     "scripts/ssm_run.sh",
     "scripts/smoke_prod.sh",
+    "scripts/prod_health.sh",
+    "scripts/backup_drill.sh",
     "deploy/restore_index.sh",
     "deploy/render_env.sh",
     "deploy/deploy.sh",
     "deploy/frl-compose",
+    "deploy/backup.sh",
 ]
 
 
@@ -57,3 +61,23 @@ def test_workflows_deploy_from_the_production_environment_only() -> None:
         text = (REPO_ROOT / ".github" / "workflows" / name).read_text()
         assert "environment: production" in text and "workflow_dispatch" in text, name
         assert "runs-on: ubuntu-24.04-arm" in text, name  # the server is arm64
+
+
+def test_deploy_installs_the_backup_timer_for_the_live_release() -> None:
+    systemd = REPO_ROOT / "deploy" / "systemd"
+    service = (systemd / "frl-backup.service").read_text()
+    assert "ExecStart=/opt/frl/current/backup.sh" in service
+    assert "OnCalendar=" in (systemd / "frl-backup.timer").read_text()
+    deploy = (REPO_ROOT / "deploy" / "deploy.sh").read_text()
+    assert "systemd/frl-backup.{service,timer}" in deploy
+    assert "enable -q --now frl-backup.timer" in deploy
+
+
+def test_backups_go_where_only_the_instance_may_put() -> None:
+    """backup.sh writes under backups/, the instance role's put-only prefix; the drill and the
+    health check read the same prefix."""
+    assert "/backups/frl_app/" in (REPO_ROOT / "deploy" / "backup.sh").read_text()
+    for script in ("backup_drill.sh", "prod_health.sh"):
+        assert "--prefix backups/frl_app/" in (REPO_ROOT / "scripts" / script).read_text()
+    iam = (REPO_ROOT / "infra" / "prod" / "iam.tf").read_text()
+    assert '"${aws_s3_bucket.data.arn}/backups/*"' in iam

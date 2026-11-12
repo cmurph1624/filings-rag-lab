@@ -14,9 +14,12 @@ AWS account 271200701471, us-east-2. Two configurations:
     IMDSv2 only and no SSH, plus an Elastic IP and the A record. Cloud-init installs Docker,
     Compose and the AWS CLI and adds 2 GB of swap. Postgres lives on the root disk, so the
     instance ignores later AMI and user-data changes and has termination protection.
+  - **self-healing:** two CloudWatch alarms on the instance's status checks. A failed system
+    check (AWS hardware) recovers the instance onto healthy hardware, keeping its ID, address
+    and disk; a failed instance check (a wedged OS) reboots it.
 
 Approximate cost: **about $31/month** (instance $24.50, public IPv4 $3.65, disk $2.40, zone
-$0.50; S3 and ECR are pennies). Without the instance, EIP and record it's about $0.50.
+$0.50, alarms $0.20; S3 and ECR are pennies). Without the instance, EIP and record it's about $0.50.
 
 **The account must be on the AWS Paid plan.** The Free plan allows only micro and small
 instance types, and closes the account when its credits or six months run out.

@@ -7,7 +7,8 @@
 # Steps: pull <ecr>/frl:<sha>; point /opt/frl/current here and render the env from SSM; start
 # the db and migrate frl_app; start the api and Caddy (only once an index has been restored:
 # until then the api has nothing to read); record this release as good and the one before as
-# previous. On failure /opt/frl/current goes back to the last good release.
+# previous. On failure /opt/frl/current goes back to the last good release. Also installs the
+# daily backup timer (backup.sh).
 #
 # Rollback: run the workflow again with the previous SHA (cat /opt/frl/previous).
 set -euo pipefail
@@ -35,6 +36,10 @@ aws ecr get-login-password | docker login --username AWS --password-stdin "${FRL
 docker pull -q "$image"
 
 install -m 0755 "$HERE/frl-compose" /usr/local/bin/frl-compose
+# The daily frl_app backup. Its service runs /opt/frl/current/backup.sh, i.e. the live release's.
+install -m 0644 "$HERE"/systemd/frl-backup.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable -q --now frl-backup.timer
 umask 077
 # Compose always runs through /opt/frl/current, so its bind-mount paths (Caddyfile, initdb)
 # stay the same across releases: a different path would make Compose recreate the db and

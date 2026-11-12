@@ -22,6 +22,8 @@ root-only) and, as for any container, in Docker's container config on the encryp
 /opt/frl/state.env         FRL_IMAGE and ACME_CA of the live release
 /run/frl/env, stack.env    rendered from SSM on each deploy
 /usr/local/bin/frl-compose docker compose for the live stack: frl-compose ps | logs -f api | …
+/etc/systemd/system/frl-backup.{service,timer}   the daily frl_app backup (backup.sh)
+/var/backups/frl/          the last 7 backups, also in S3
 ```
 
 There is no SSH. Get a shell with `aws ssm start-session --profile frl-admin --target <instance>`
@@ -133,6 +135,44 @@ $C up -d --wait api
 The next restore drops `frl_index_bad`.
 
 Never run `down -v` here. It deletes `frl_app` and Caddy's certificates.
+
+## Backups
+
+`frl_app` (served queries, feedback, rate events) is the only data that can't be rebuilt.
+`frl-backup.timer` runs `backup.sh` daily at 09:00 UTC. It does the following:
+
+1. dumps `frl_app` through the db container (custom format);
+2. checks that the archive lists data for all three tables;
+3. uploads it to `s3://frl-271200701471-data/backups/frl_app/frl_app-<UTC time>.dump`;
+4. keeps the newest 7 locally in `/var/backups/frl`.
+
+S3 keeps backups for 90 days. The instance role can only *put* under `backups/`: it can't
+read, list or delete them, so a compromised server can't destroy its own backups. `frl_index`
+is never backed up; the restore-index workflow rebuilds it from the Nucbox's dump.
+
+- **Status:** `systemctl status frl-backup.timer frl-backup` and `journalctl -u frl-backup` on the server.
+  `AWS_PROFILE=frl-admin scripts/prod_health.sh` (the ops registry's health check) fails when the newest
+  backup is over 30 hours old.
+- **Back up now:** `AWS_PROFILE=frl-admin scripts/ssm_run.sh 300 backup <<< 'systemctl start frl-backup'`.
+- **Restore drill** (on the Nucbox; nothing is kept): `AWS_PROFILE=frl-admin scripts/backup_drill.sh`
+  restores the newest backup into a throwaway container and prints each table's row count.
+
+### Restoring into production
+
+The server can't read its backups, so hand it a short-lived link from an admin profile.
+`--clean` replaces what's in `frl_app`:
+
+```sh
+url="$(aws s3 presign --profile frl-admin --expires-in 600 s3://frl-271200701471-data/backups/frl_app/<file>.dump)"
+AWS_PROFILE=frl-admin scripts/ssm_run.sh 600 restore-app <<EOF
+set -euo pipefail
+frl-compose stop api
+curl -fsS '$url' | frl-compose exec -T db pg_restore -U frl -d frl_app --clean --if-exists --exit-on-error
+frl-compose up -d --wait
+EOF
+```
+
+The link appears in the SSM command's record, but it expires in 10 minutes.
 
 ## Privacy
 
