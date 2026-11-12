@@ -14,7 +14,7 @@ def test_the_dump_uses_the_production_db_image() -> None:
     """A dump restores cleanly only into the same Postgres/pgvector build that made it."""
     compose = DIGEST.findall((REPO_ROOT / "deploy" / "compose.prod.yaml").read_text())
     assert len(compose) == 1
-    for script in ("serving_dump.sh", "backup_drill.sh"):
+    for script in ("serving_dump.sh", "backup_lib.sh"):
         assert DIGEST.findall((REPO_ROOT / "scripts" / script).read_text()) == compose, script
 
 
@@ -24,6 +24,7 @@ SCRIPTS = [
     "scripts/smoke_prod.sh",
     "scripts/prod_health.sh",
     "scripts/backup_drill.sh",
+    "scripts/feedback_pull.sh",
     "deploy/restore_index.sh",
     "deploy/render_env.sh",
     "deploy/deploy.sh",
@@ -35,6 +36,10 @@ SCRIPTS = [
 @pytest.mark.parametrize("script", SCRIPTS)
 def test_scripts_parse(script: str) -> None:
     subprocess.run(["bash", "-n", str(REPO_ROOT / script)], check=True)
+
+
+def test_the_sourced_restore_library_parses() -> None:
+    subprocess.run(["bash", "-n", str(REPO_ROOT / "scripts" / "backup_lib.sh")], check=True)
 
 
 def test_scripts_are_executable() -> None:
@@ -76,10 +81,10 @@ def test_deploy_installs_the_backup_timer_outside_the_release() -> None:
 
 
 def test_backups_go_where_only_the_instance_may_put() -> None:
-    """backup.sh writes under backups/, the instance role's put-only prefix; the drill and the
-    health check read the same prefix."""
+    """backup.sh writes under backups/, the instance role's put-only prefix; the restore library
+    (drill, feedback pull) and the health check read the same prefix."""
     assert "/backups/frl_app/" in (REPO_ROOT / "deploy" / "backup.sh").read_text()
-    for script in ("backup_drill.sh", "prod_health.sh"):
+    for script in ("backup_lib.sh", "prod_health.sh"):
         assert "--prefix backups/frl_app/" in (REPO_ROOT / "scripts" / script).read_text()
     iam = (REPO_ROOT / "infra" / "prod" / "iam.tf").read_text()
     assert '"${aws_s3_bucket.data.arn}/backups/*"' in iam

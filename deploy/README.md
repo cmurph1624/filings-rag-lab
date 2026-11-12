@@ -156,6 +156,22 @@ is never backed up; the restore-index workflow rebuilds it from the Nucbox's dum
 - **Back up now:** `AWS_PROFILE=frl-admin scripts/ssm_run.sh 300 backup <<< 'systemctl start frl-backup'`.
 - **Restore drill** (on the Nucbox; nothing is kept): `AWS_PROFILE=frl-admin scripts/backup_drill.sh`
   restores the newest backup into a throwaway container and prints each table's row count.
+  First run 2026-11-12: 11 queries, 4 feedback rows, 11 rate events restored. A reboot test the
+  same day had the site back in 35 s, with no help.
+
+### Feedback → eval cases
+
+Thumbs-downs become cases in `prod-feedback@1`, a set of their own, never part of the
+open-subset headline (`src/filings_rag/benchmark/feedback.py`):
+
+1. `AWS_PROFILE=frl-admin scripts/feedback_pull.sh`: the newest backup's thumbs-downs (smoke excluded)
+   go to `data/feedback/<date>.jsonl`, which stays uncommitted because these are strangers' questions.
+2. `uv run frl bench from-feedback data/feedback/<date>.jsonl <query id prefix>...`: appends a draft
+   case per query to `corpus/prod-feedback@1.jsonl`. The draft has the question as asked and an empty gold.
+3. Fill the gold by hand from the filing: `answer`, `company`, `doc_name`, `justification`, and
+   `evidence` when there's a passage. No model writes gold.
+4. `uv run frl bench load-feedback`, which refuses drafts, then
+   `uv run frl run configs/p4-prod-feedback.toml`, which is the served pipeline (checked by a test).
 
 ### Restoring into production
 

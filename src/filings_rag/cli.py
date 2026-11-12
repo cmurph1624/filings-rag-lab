@@ -11,7 +11,7 @@ from psycopg import sql
 
 from filings_rag import cache, corpora, db
 from filings_rag.backends.factory import make_backend
-from filings_rag.benchmark import financebench, synth, synth_gen
+from filings_rag.benchmark import feedback, financebench, synth, synth_gen
 from filings_rag.config import get_settings
 from filings_rag.edgar import expand, fetch, resolve
 from filings_rag.edgar.client import EdgarClient
@@ -197,6 +197,38 @@ def bench_load_synth() -> None:
             path = CORPUS / f"{ref}.jsonl"
             if path.exists():
                 typer.echo(f"{ref}: loaded {synth.load(conn, synth.read_jsonl(path))} questions")
+
+
+@bench_app.command("from-feedback")
+def bench_from_feedback(
+    pulled: Annotated[Path, typer.Argument(help="a file written by scripts/feedback_pull.sh")],
+    query_ids: Annotated[list[str], typer.Argument(help="query id prefixes (8+ hex characters)")],
+    out: Annotated[Path, typer.Option(help="the case file")] = CORPUS / f"{feedback.SET}.jsonl",
+) -> None:
+    """Append a draft prod-feedback@1 case for each chosen thumbs-down. The gold is left empty:
+    fill it in by hand from the filing, then `frl bench load-feedback`."""
+    existing = synth.read_jsonl(out) if out.exists() else []
+    drafts = [feedback.draft(r) for r in feedback.pick(feedback.read_pulled(pulled), query_ids)]
+    merged, added = feedback.merge(existing, drafts)
+    synth.write_jsonl(out, merged)
+    typer.echo(f"added {added} draft case(s) to {out}; {len(drafts) - added} already there")
+    for q in drafts:
+        typer.echo(f"  {q.id}: {q.question[:90]}")
+
+
+@bench_app.command("load-feedback")
+def bench_load_feedback(
+    path: Annotated[Path, typer.Option(help="the case file")] = CORPUS / f"{feedback.SET}.jsonl",
+) -> None:
+    """Load prod-feedback@1 into the database. Refuses while any case is still a draft."""
+    cases = synth.read_jsonl(path)
+    todo = {q.id: p for q in cases if (p := feedback.problems(q))}
+    if todo:
+        for qid, p in todo.items():
+            typer.echo(f"{qid}: {', '.join(p)}", err=True)
+        raise typer.Exit(1)
+    with psycopg.connect(get_settings().database_url) as conn:
+        typer.echo(f"{feedback.SET}: loaded {synth.load(conn, cases)} questions")
 
 
 @corpus_app.command("audit")

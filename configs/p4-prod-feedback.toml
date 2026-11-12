@@ -1,0 +1,35 @@
+# Production feedback cases (P4 PR 10): prod-feedback@1 replayed through exactly what the
+# public site serves, i.e. configs/serve.toml's effective config (run 846's pipeline with the
+# answer model on the Anthropic API). tests/test_feedback.py checks the two stay identical apart
+# from the name and question set. Its own set: never part of the open-subset headline.
+name = "p4-prod-feedback"
+pipeline = "structured@1"
+questions = "prod-feedback@1"
+corpus = "fb-distractors@1"
+
+[retriever]
+kind = "vector"
+k = 10
+rerank = { model = "rerank-3", candidates = 50 }
+
+[retriever.scope]
+mode = "rules"
+forecast_lookback = 1
+fiscal_labels = "financebench"
+
+[router]
+mode = "rules"
+
+[generation]  # as served: ~$0.02 a question
+backend = "anthropic-api"
+model = "claude-sonnet-5-5"
+prompt = "answer@4"
+
+[judge]  # stronger than the generator, pinned per run (as for the open subset)
+backend = "claude-cli"
+model = "claude-opus-5-5"
+prompt = "judge@1"
+
+[execution]  # not part of the config hash
+concurrency = 2
+max_consecutive_failures = 5
