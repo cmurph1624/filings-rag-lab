@@ -21,8 +21,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://frl:frl@localhost:5432/frl
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
@@ -35,7 +35,7 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build --build-arg GIT_SHA=${{ github.sha }} -t frl:ci .
       - name: Paths and config inside the image
         run: |
@@ -70,8 +70,8 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.14.9
       - run: terraform fmt -recursive -check -diff infra

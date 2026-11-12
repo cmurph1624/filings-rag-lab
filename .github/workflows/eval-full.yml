@@ -22,7 +22,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Answer eval
         run: scripts/ci_eval_full.sh "$RUNNER_TEMP/report.md"
       - name: Post the report on the PR

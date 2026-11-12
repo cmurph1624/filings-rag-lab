@@ -41,7 +41,7 @@ jobs:
           [[ "$DUMP" =~ ^serving/[A-Za-z0-9_.@-]+/[A-Za-z0-9_.-]+\.dump$ ]] ||
             { echo "::error::expected serving/<pipeline>/<name>.dump"; exit 1; }
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: AWS CLI
         run: |
@@ -49,7 +49,7 @@ jobs:
           curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscli.zip
           unzip -q /tmp/awscli.zip -d /tmp && sudo /tmp/aws/install
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.ROLE }}
           aws-region: ${{ env.AWS_REGION }}
