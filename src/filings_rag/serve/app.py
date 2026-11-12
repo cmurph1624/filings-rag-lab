@@ -26,12 +26,28 @@ from filings_rag.serve.service import QuestionTooLong, Service
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
 COMPANIES_SLOT = "<!-- companies -->"
+# The tab icon is the header logo; browsers ask for /favicon.ico on their own.
+ICONS = {
+    "favicon.svg": "image/svg+xml",
+    "favicon.ico": "image/x-icon",
+    "apple-touch-icon.png": "image/png",
+}
 
 
 def index_page(companies: list[str]) -> str:
     """The ask page with the covered companies filled in from `corpus/companies.csv`."""
     items = "".join(f"<li>{html.escape(c)}</li>" for c in sorted(companies, key=str.casefold))
     return (STATIC / "index.html").read_text().replace(COMPANIES_SLOT, items)
+
+
+def icon_route(name: str, media_type: str) -> Callable[[], FileResponse]:
+    """A handler with no parameters: FastAPI turns any parameter, even a defaulted one,
+    into a query parameter, so a bound `name` would let a client pick the file."""
+
+    def icon() -> FileResponse:
+        return FileResponse(STATIC / name, media_type=media_type)
+
+    return icon
 
 
 def exit_soon() -> None:
@@ -95,6 +111,9 @@ def create_app(
     @app.get("/markdown.js", include_in_schema=False)
     def markdown_js() -> FileResponse:
         return FileResponse(STATIC / "markdown.js", media_type="text/javascript")
+
+    for name, media_type in ICONS.items():
+        app.add_api_route(f"/{name}", icon_route(name, media_type), include_in_schema=False)
 
     @app.post("/ask")
     def ask(body: AskBody, request: Request) -> JSONResponse:
