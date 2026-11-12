@@ -22,8 +22,13 @@ image="$FRL_ECR:$sha"
 acme="https://acme-v02.api.letsencrypt.org/directory"
 [[ "${ACME_STAGING:-0}" == 1 ]] && acme="https://acme-staging-v02.api.letsencrypt.org/directory"
 # The last release that came up (only written on success), not whatever /opt/frl/current
-# points at: a failed deploy may have left that on a broken release.
-prev="$(cat /opt/frl/good 2>/dev/null || true)"
+# points at: a failed deploy may have left that on a broken release. Servers from before
+# /opt/frl/good existed fall back to /opt/frl/current once.
+if [[ -s /opt/frl/good ]]; then
+  prev="$(cat /opt/frl/good)"
+else
+  prev="$(readlink /opt/frl/current 2>/dev/null | xargs -r basename || true)"
+fi
 
 say "pulling $image"
 aws ecr get-login-password | docker login --username AWS --password-stdin "${FRL_ECR%%/*}" >/dev/null
@@ -43,15 +48,25 @@ dc() { docker compose --env-file /run/frl/stack.env -f /opt/frl/current/compose.
 back_to_good() {
   if [[ -n "$prev" && -d "/opt/frl/releases/$prev" ]]; then
     point "/opt/frl/releases/$prev" && /opt/frl/current/render_env.sh || true
+    echo "deploy failed; /opt/frl/current is back on $prev" >&2
+  else
+    rm -f /opt/frl/current  # no release has come up yet
+    echo "deploy failed; no release has come up yet, so /opt/frl/current is removed" >&2
   fi
-  echo "deploy failed; /opt/frl/current is back on ${prev:-nothing}" >&2
 }
 trap back_to_good ERR
 point "$HERE"
 FRL_STATE="$next" "$HERE/render_env.sh"
 
 say "starting the db; migrating frl_app"
+db_before="$(dc ps -q db 2>/dev/null || true)"
 dc up -d --wait db
+# A recreated db drops the api's connections. The api would notice through its healthcheck
+# and restart itself, but restart it now rather than serve errors until then.
+if [[ -n "$db_before" && "$(dc ps -q db)" != "$db_before" && -n "$(dc ps -q api)" ]]; then
+  say "the db was recreated; restarting the api"
+  dc restart api
+fi
 app_url="$(grep '^APP_DATABASE_URL=' /run/frl/env | cut -d= -f2-)"
 dc run --rm -T --no-deps -e DATABASE_URL="$app_url" api frl db migrate
 

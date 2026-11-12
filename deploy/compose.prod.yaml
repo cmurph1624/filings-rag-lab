@@ -68,7 +68,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        restart: true # Compose restarts the api when it recreates the db (its connections die)
+        restart: true # helps when one `up` recreates both; the healthcheck exit is the guarantee
     networks: [frl]
     # Not published: only Caddy reaches it. Health is the image's HEALTHCHECK (/healthz); if
     # the api loses its index connection it exits and Docker restarts it.

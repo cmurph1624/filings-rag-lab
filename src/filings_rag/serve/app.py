@@ -7,6 +7,7 @@ what must be serialized. `create_app` takes a factory so tests can build the Ser
 
 import logging
 import os
+import signal
 import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -26,8 +27,9 @@ log = logging.getLogger(__name__)
 
 
 def exit_soon() -> None:
-    """Exit the process a moment after the current response is sent; Docker restarts it."""
-    threading.Timer(1.0, os._exit, (3,)).start()
+    """Shut down a moment after the current response is sent: SIGTERM, so uvicorn stops
+    gracefully (the lifespan closes the Service and flushes traces). Docker restarts it."""
+    threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGTERM)).start()
 
 
 class AskBody(BaseModel):
