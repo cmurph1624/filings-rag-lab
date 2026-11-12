@@ -169,7 +169,9 @@ open-subset headline (`src/filings_rag/benchmark/feedback.py`):
 2. `uv run frl bench from-feedback data/feedback/<date>.jsonl <query id prefix>...`: appends a draft
    case per query to `corpus/prod-feedback@1.jsonl`. The draft has the question as asked and an empty gold.
 3. Fill the gold by hand from the filing: `answer`, `company`, `doc_name`, `justification`, and
-   `evidence` when there's a passage. No model writes gold.
+   `evidence` when there's a passage. No model writes gold. Before committing, read the question
+   and remove anything personal (names, account numbers, contact details), rewording if needed
+   while keeping what made it fail. The case file is committed; the pulled file isn't.
 4. `uv run frl bench load-feedback`, which refuses drafts, then
    `uv run frl run configs/p4-prod-feedback.toml`, which is the served pipeline (checked by a test).
 

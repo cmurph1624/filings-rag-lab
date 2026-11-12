@@ -80,6 +80,7 @@ def test_cli_appends_drafts_and_load_refuses_them(tmp_path: Path) -> None:
     runner = CliRunner()
     res = runner.invoke(app, ["bench", "from-feedback", str(pulled), QID[:8], "--out", str(cases)])
     assert res.exit_code == 0, res.output
+    assert "remove anything personal" in res.output
     assert [q.id for q in read_jsonl(cases)] == ["prodfeedback1/d789206a0003"]
     again = runner.invoke(
         app, ["bench", "from-feedback", str(pulled), QID[:8], "--out", str(cases)]

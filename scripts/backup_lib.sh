@@ -18,7 +18,8 @@ trap _cleanup EXIT
 restore_backup() {
   backup_key="${1:-$(aws s3api list-objects-v2 --bucket "$bucket" --prefix backups/frl_app/ \
     --query 'max_by(Contents, &LastModified).Key' --output text)}"
-  [[ "$backup_key" == backups/frl_app/*.dump ]] || { echo "no backup found (got '$backup_key')" >&2; return 1; }
+  # Strict: the key also ends up inside SQL (feedback_pull.sh) and must not carry quotes.
+  [[ "$backup_key" =~ ^backups/frl_app/[A-Za-z0-9._-]+\.dump$ ]] || { echo "no backup found (got '$backup_key')" >&2; return 1; }
   aws s3 cp --only-show-errors "s3://$bucket/$backup_key" "$_tmp/app.dump"
   echo "restoring $backup_key ($(stat -c%s "$_tmp/app.dump") bytes)" >&2
   docker run -d --name "$_name" -e POSTGRES_USER=frl -e POSTGRES_PASSWORD=drill \

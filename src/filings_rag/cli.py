@@ -214,6 +214,10 @@ def bench_from_feedback(
     typer.echo(f"added {added} draft case(s) to {out}; {len(drafts) - added} already there")
     for q in drafts:
         typer.echo(f"  {q.id}: {q.question[:90]}")
+    typer.echo(
+        "Before committing: fill in the gold by hand, and remove anything personal from the"
+        " question text (it's a stranger's words)."
+    )
 
 
 @bench_app.command("load-feedback")

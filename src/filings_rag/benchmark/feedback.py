@@ -8,7 +8,10 @@ the open-subset headline.
    query to `corpus/prod-feedback@1.jsonl`: the question as asked, the filing the scope picked
    when it picked exactly one, and an empty gold answer.
 3. A person fills in the gold by hand (answer, company, doc_name, justification and, when there
-   is one, the evidence passage), checking it against the filing. No model writes gold.
+   is one, the evidence passage), checking it against the filing. No model writes gold. The same
+   person reads the question before the file is committed: it's a stranger's text, so anything
+   personal in it (names, account numbers, contact details) is removed or the question reworded,
+   keeping what made it fail.
 4. `frl bench load-feedback` loads the set, refusing while any case is still a draft, and
    `frl run configs/p4-prod-feedback.toml` replays it through the production pipeline.
 """
