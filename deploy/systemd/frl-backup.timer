@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily frl_app backup
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

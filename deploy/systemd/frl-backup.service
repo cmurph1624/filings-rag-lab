@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up frl_app to S3 (deploy/backup.sh)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/frl-backup
