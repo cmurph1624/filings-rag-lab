@@ -1,0 +1,25 @@
+#cloud-config
+# First boot only (instance.tf ignores later changes). Installs Docker, Compose and the AWS CLI,
+# adds 2 GB of swap, and writes the host settings the deploy scripts read.
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - python3
+  - unzip
+swap:
+  filename: /swapfile
+  size: 2147483648
+write_files:
+  - path: /etc/frl/host.env
+    permissions: "0644"
+    content: |
+      AWS_DEFAULT_REGION=${region}
+      FRL_ECR=${ecr}
+      FRL_BUCKET=${bucket}
+      FRL_HOST=${domain}
+runcmd:
+  - snap install aws-cli --classic
+  - systemctl enable --now docker
+  - mkdir -p /opt/frl/releases

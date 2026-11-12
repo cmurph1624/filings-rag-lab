@@ -34,6 +34,7 @@ if [[ -z "${DATABASE_URL:-}" && -f "$ROOT/.env" ]]; then
   DATABASE_URL="$(grep -E '^DATABASE_URL=' "$ROOT/.env" | head -1 | cut -d= -f2-)"
 fi
 : "${DATABASE_URL:?set DATABASE_URL}"
+[[ "$DATABASE_URL" != op://* ]] || { echo "DATABASE_URL is a 1Password reference: run under op run" >&2; exit 2; }
 
 pg() {  # a Postgres client tool from PG_IMAGE, reaching the host's loopback-bound database
   docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$out:/out" "$PG_IMAGE" "$@"

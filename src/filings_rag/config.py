@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # restarts. Empty: a random salt per process.
     ip_hash_salt: str = ""
     serve_tag: str = "local"  # tags served_queries rows (and traces): local, prod
+    # A request sending this in X-Smoke-Token is tagged "smoke" instead (the post-deploy smoke
+    # test), so it stays out of the stats. Empty: no request is tagged smoke.
+    smoke_token: str = ""
     # Langfuse tracing for the serving app; off unless both keys are set.
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

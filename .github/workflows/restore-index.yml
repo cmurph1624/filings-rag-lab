@@ -1,0 +1,76 @@
+# Restore a serving index dump on the server (by hand, from the Actions tab). The dump and its
+# manifest come from scripts/serving_dump.sh --upload on the Nucbox. Runs
+# deploy/restore_index.sh through SSM: verify, restore beside the live index, swap, check, and
+# roll back by itself if the api is unhealthy on the new index. Needs one deploy first.
+name: restore-index
+
+on:
+  workflow_dispatch:
+    inputs:
+      dump:
+        description: S3 key of the dump, e.g. serving/structured@1/<stamp>-<sha>.dump
+        required: true
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  ROLE: arn:aws:iam::271200701471:role/frl-gha-deploy
+  HOST: filings.stigmergylabs.net
+  DUMP: ${{ inputs.dump }}
+
+# Explicit bash: -eo pipefail (the default shell has no pipefail).
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - name: Check the key
+        run: |
+          [[ "$DUMP" =~ ^serving/[A-Za-z0-9_.@-]+/[A-Za-z0-9_.-]+\.dump$ ]] ||
+            { echo "::error::expected serving/<pipeline>/<name>.dump"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - name: AWS CLI
+        run: |
+          command -v aws && exit 0
+          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && sudo /tmp/aws/install
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Restore on the server
+        run: |
+          scripts/ssm_run.sh 2400 "restore-index $DUMP" <<EOS
+          set -euo pipefail
+          export PATH=/snap/bin:/usr/local/bin:/usr/bin:/bin
+          set -a; . /etc/frl/host.env; set +a
+          [[ -x /opt/frl/current/deploy.sh ]] || { echo "deploy once first" >&2; exit 1; }
+          /opt/frl/current/render_env.sh
+          set -a; . /run/frl/stack.env; set +a
+          COMPOSE=frl-compose /opt/frl/current/restore_index.sh "s3://\$FRL_BUCKET/$DUMP"
+          frl-compose up -d --wait --remove-orphans
+          EOS
+
+      - name: Check the site
+        run: |
+          for _ in $(seq 1 18); do
+            curl -fsS -k --max-time 10 "https://$HOST/healthz" | grep -q '"ok":true' && { echo healthy; exit 0; }
+            sleep 10
+          done
+          echo "::error::https://$HOST/healthz isn't ok"; exit 1

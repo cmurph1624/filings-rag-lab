@@ -14,6 +14,7 @@ locals {
     "ip_hash_salt",
     "postgres_password",
     "reader_password",
+    "smoke_token", # sent as X-Smoke-Token, it keeps the smoke test out of the stats
   ])
 }
 
@@ -24,6 +25,11 @@ resource "aws_ssm_parameter" "secret" {
   value_wo         = "placeholder"
   value_wo_version = 1
   description      = "Set by hand with put-parameter --overwrite; see infra/prod/ssm.tf"
+  # SSM can't change a description without rewriting the value, and the value Terraform has
+  # is the placeholder: never "fix" a description edited outside Terraform.
+  lifecycle {
+    ignore_changes = [description]
+  }
 }
 
 # Not secret: the email Let's Encrypt writes to about expiring certificates.

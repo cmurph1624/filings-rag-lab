@@ -3,16 +3,23 @@
 AWS account 271200701471, us-east-2. Two configurations:
 
 - **`bootstrap/`**: the S3 bucket holding Terraform state (versioned, encrypted, TLS-only).
-- **`prod/`**: everything the serving app needs except the instance, which comes with the deploy (P4 PR 8):
+- **`prod/`**: everything the serving app needs:
   - **network:** VPC, public subnet, internet gateway, and a security group allowing 80/443 only (no SSH);
   - **data bucket:** `frl-271200701471-data`, with `serving/`, `deploy/` and `backups/`;
   - **ECR:** repository `frl`, with immutable tags, keeping the last 15 images;
   - **IAM:** the instance role, plus a GitHub OIDC deploy role usable only from this repo's `production` environment;
   - **SSM:** `/frl/prod/*` secret placeholders;
-  - **Route 53:** the zone for `filings.stigmergylabs.net`.
+  - **Route 53:** the zone for `filings.stigmergylabs.net`;
+  - **the server:** a t4g.medium (ARM, 4 GB) on Ubuntu 24.04 with a 30 GB encrypted disk,
+    IMDSv2 only and no SSH, plus an Elastic IP and the A record. Cloud-init installs Docker,
+    Compose and the AWS CLI and adds 2 GB of swap. Postgres lives on the root disk, so the
+    instance ignores later AMI and user-data changes and has termination protection.
 
-Approximate cost of this stage: **about $0.50/month** (the hosted zone). Everything else is free or
-pennies: S3 and ECR storage, with no NAT gateway, load balancer or instance yet.
+Approximate cost: **about $31/month** (instance $24.50, public IPv4 $3.65, disk $2.40, zone
+$0.50; S3 and ECR are pennies). Without the instance, EIP and record it's about $0.50.
+
+**The account must be on the AWS Paid plan.** The Free plan allows only micro and small
+instance types, and closes the account when its credits or six months run out.
 
 Nothing here is applied by CI. CI runs only `fmt -check` and `validate`, and every `apply` is
 run by hand.
@@ -62,5 +69,10 @@ If the account already has GitHub's OIDC provider, the plan fails creating it. I
   ```
   Terraform wrote the placeholders through write-only attributes, so no value, placeholder or
   real, is ever in Terraform state. A later `apply` never overwrites what you set.
+- **Set the smoke token** (random; `scripts/smoke_prod.sh` reads it back from SSM):
+  ```sh
+  aws ssm put-parameter --profile frl-admin --name /frl/prod/smoke_token --type SecureString \
+    --overwrite --value "$(openssl rand -hex 32)"
+  ```
 - **Create the GitHub environment.** Add a `production` environment in the repo settings and
   limit its deployment branches to `main`. The deploy role trusts only that environment.
