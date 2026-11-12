@@ -12,21 +12,27 @@ set -a; . /etc/frl/host.env; set +a
 
 umask 077
 mkdir -p /run/frl
-aws ssm get-parameters-by-path --path /frl/prod --with-decryption \
-  --query 'Parameters[].[Name,Value]' --output json |
-  python3 -c '
-import json, sys
+python3 - <<'PY'
+import json, subprocess, sys
 from urllib.parse import quote
 
-p = {name.rsplit("/", 1)[1]: value for name, value in json.load(sys.stdin)}
-unset = lambda v: not v or v.startswith("placeholder")
 required = ["anthropic_api_key", "voyage_api_key", "ip_hash_salt", "postgres_password",
             "reader_password", "acme_email"]
+optional = {"LANGFUSE_PUBLIC_KEY": "langfuse_public_key",
+            "LANGFUSE_SECRET_KEY": "langfuse_secret_key", "SMOKE_TOKEN": "smoke_token"}
+# By name (GetParameters, at most 10): the instance role may read /frl/prod/*, not list it.
+names = [f"/frl/prod/{n}" for n in required + list(optional.values())]
+got = subprocess.run(
+    ["aws", "ssm", "get-parameters", "--with-decryption", "--names", *names,
+     "--query", "Parameters[].[Name,Value]", "--output", "json"],
+    capture_output=True, text=True)
+if got.returncode:
+    sys.exit("reading SSM failed: " + got.stderr.strip())
+p = {name.rsplit("/", 1)[1]: value for name, value in json.loads(got.stdout)}
+unset = lambda v: not v or v.startswith("placeholder")
 missing = [k for k in required if unset(p.get(k))]
 if missing:
     sys.exit("not set in SSM (/frl/prod): " + ", ".join(missing))
-optional = {"LANGFUSE_PUBLIC_KEY": "langfuse_public_key",
-            "LANGFUSE_SECRET_KEY": "langfuse_secret_key", "SMOKE_TOKEN": "smoke_token"}
 
 pw, rpw = quote(p["postgres_password"], safe=""), quote(p["reader_password"], safe="")
 api = {
@@ -44,7 +50,7 @@ stack = {
 for path, values in (("/run/frl/env", api), ("/run/frl/stack.env", stack)):
     with open(path, "w") as fh:
         fh.writelines(f"{k}={v}\n" for k, v in values.items())
-'
+PY
 {
   echo "FRL_HOST=$FRL_HOST"
   state="${FRL_STATE:-/opt/frl/state.env}"
