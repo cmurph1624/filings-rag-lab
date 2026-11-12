@@ -51,7 +51,8 @@
 
   .bars { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
   .bar { display: flex; align-items: center; gap: 12px; font-size: 14px; }
-  .bar > span:first-child { flex: 0 0 150px; }
+  .bar > span:first-child { flex: 0 0 190px; }
+  @media (max-width: 640px) { .bar > span:first-child { flex-basis: 150px; font-size: 13px; } }
   .bar .track { flex: 1 1 auto; height: 10px; background: var(--soft); border-radius: 5px; overflow: hidden; }
   .bar .track i { display: block; height: 10px; background: var(--accent); border-radius: 5px; }
   .bar > span:last-child { flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -133,6 +134,54 @@
       <div><dt>Generate</dt><dd>Claude Sonnet 5.5 with <code>answer@4</code>: answer only from the Facts
         and Excerpts, cite each one, and say so when the evidence is missing.</dd></div>
     </dl>
+  </section>
+
+  <section class="stack" aria-labelledby="means" style="gap:20px">
+    <div class="intro" style="gap:8px">
+      <h2 id="means" class="h2">What 87.3% means</h2>
+      <p style="color:var(--body)">131 of the 150 questions in FinanceBench's open subset were answered
+        correctly. Each question is about a real SEC filing and comes with an answer written by an
+        analyst. Run 846 is the same pipeline this site runs.</p>
+    </div>
+    <dl>
+      <div><dt>1. Answer</dt><dd>The pipeline above answers each question. It searches all 367 filings,
+        not just the one a question is about, so finding the right document is part of the test.</dd></div>
+      <div><dt>2. Grade</dt><dd>Claude Opus 5.5 compares the answer with the analyst's. Numbers must
+        match at the analyst's precision (about 1% leeway on computed ratios), for the same period and
+        units. An answer that hedges between two numbers is wrong.</dd></div>
+      <div><dt>3. Count</dt><dd>Anything not graded correct counts against it. Of the 19 misses, 18
+        were wrong answers and 1 was a refusal.</dd></div>
+    </dl>
+    <div class="cards">
+      <div class="card grow">
+        <h3>By kind of question</h3>
+        <p style="font-size:14px">Questions labelled by hand. Exact figures from XBRL did most of the
+          work; questions that need figures and text together are the weak spot.</p>
+        <div class="bars" role="img" aria-label="Accuracy by kind of question: figures and calculations 98.4%, from the report's text 84.3%, figures and text together 58.8%">
+          <div class="bar"><span>Figures, calculations (63)</span><span class="track"><i style="width:98.4%"></i></span><span>98.4%</span></div>
+          <div class="bar"><span>Report's text (70)</span><span class="track"><i style="width:84.3%"></i></span><span>84.3%</span></div>
+          <div class="bar"><span>Both together (17)</span><span class="track"><i style="width:58.8%"></i></span><span>58.8%</span></div>
+        </div>
+      </div>
+      <div class="card grow">
+        <h3>How much to trust it</h3>
+        <ul>
+          <li><b>Stable:</b> three runs with nothing changed scored 87.3%, 86.7% and 86.7%; grading the
+            same answers three times gave identical verdicts.</li>
+          <li><b>A small sample:</b> with 150 questions the 95% interval is about 81–92%, so the 84%
+            scores for other answer models aren't clearly worse.</li>
+          <li><b>A model grades it:</b> the few verdicts that flip between runs sit on debatable gold
+            answers, such as $0.389B against $0.40B.</li>
+          <li><b>Open subset only:</b> not comparable with full FinanceBench results.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>What it doesn't measure</h3>
+      <p>How well this site answers your questions. Visitors ask different things than a benchmark,
+        and questions outside the 32 companies are refused rather than answered. That's why a
+        thumbs-down here can become a test case that a run reproduces.</p>
+    </div>
   </section>
 
   <section class="stack" aria-labelledby="res" style="gap:20px">
