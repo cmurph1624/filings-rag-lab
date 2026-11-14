@@ -7,8 +7,10 @@ Retrieval is the focus: metadata-scoped vector retrieval in Postgres + pgvector 
 experiment harness records every run (pipeline, retriever, model, judge) with tokens and
 API-equivalent cost. CI runs lint, type checks and tests on every PR.
 
-Not finished yet: a public deployment on AWS (Terraform-provisioned EC2, P4). Everything runs
-locally for now.
+**Live at [filings.stigmergylabs.net](https://filings.stigmergylabs.net):** ask a question about
+the covered companies' filings and get a cited answer. It runs the best benchmark config on one
+Terraform-provisioned EC2 instance, with the answer model on the Anthropic API
+([`infra/`](infra/README.md), [`deploy/`](deploy/README.md)).
 
 ## Status
 
@@ -51,3 +53,8 @@ uv run frl ingest build naive-fixed@1 && uv run frl ingest label naive-fixed@1
 uv run frl run configs/p0-naive.toml        # prints the run id
 uv run frl judge <run-id> && uv run frl report <run-id>
 ```
+
+## License
+
+Code: [MIT](LICENSE). The FinanceBench dataset and the SEC filings are downloaded from their sources
+(`frl bench pull`, `frl corpus fetch`) and keep their own terms.
